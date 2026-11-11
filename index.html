@@ -88,6 +88,12 @@ function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.sav
 
 
 const sand=document.createElement('canvas'),sg=sand.getContext('2d');
+const photoBase=document.createElement('canvas'),photoContext=photoBase.getContext('2d'),sandPhoto=new Image();
+let photoReady=false,sandHasMarks=false;
+// Generated with Higgsfield, 2026-11-11. Procedural texture remains a loading/offline fallback.
+sandPhoto.onload=()=>{photoReady=true;if(!sandHasMarks)fillSand();};
+sandPhoto.onerror=()=>{photoReady=false;};
+sandPhoto.src='https://d8j0ntlcm91z4.cloudfront.net/user_3LrYXvyCUCXtXE68Fc0ZO9s8Jx5/hf_20261111_055004_c8048d8f-e481-4524-8d87-6335a0bf10c8.png';
 let previous=null,grains=[],lastFrame=0,seed=12345;
 
 // Locally synthesized dry sand friction: filtered, softly modulated noise.
@@ -135,6 +141,13 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)resetHand()
 
 function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;}
 function fillSand(){
+ sandHasMarks=false;
+ if(photoReady){
+  photoBase.width=sand.width;photoBase.height=sand.height;
+  const scale=Math.max(sand.width/sandPhoto.naturalWidth,sand.height/sandPhoto.naturalHeight);
+  photoContext.drawImage(sandPhoto,(sand.width-sandPhoto.naturalWidth*scale)/2,(sand.height-sandPhoto.naturalHeight*scale)/2,sandPhoto.naturalWidth*scale,sandPhoto.naturalHeight*scale);
+  sg.drawImage(photoBase,0,0);return;
+ }
  seed=12345;const image=sg.createImageData(sand.width,sand.height);
  for(let y=0;y<sand.height;y++)for(let x=0;x<sand.width;x++){
   const i=(y*sand.width+x)*4,noise=(random()-.5)*31;
@@ -144,17 +157,23 @@ function fillSand(){
  }sg.putImageData(image,0,0);
 }
 function size(){
- const old=document.createElement('canvas');old.width=sand.width;old.height=sand.height;old.getContext('2d').drawImage(sand,0,0);
+ const hadMarks=sandHasMarks;const old=document.createElement('canvas');old.width=sand.width;old.height=sand.height;old.getContext('2d').drawImage(sand,0,0);
  const r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);w=r.width;h=r.height;c.width=Math.round(w*d);c.height=Math.round(h*d);g.setTransform(d,0,0,d,0,0);
- sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(old.width&&old.height)sg.drawImage(old,0,0,w,h);endStroke();grains=[];
+ sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(hadMarks&&old.width&&old.height){sg.drawImage(old,0,0,w,h);sandHasMarks=true;}endStroke();grains=[];
 }
 new ResizeObserver(size).observe(c);size();
 function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
 function furrow(p){
+ sandHasMarks=true;
  const radius=10;
  const relief=sg.createRadialGradient(p.x-2,p.y-2,0,p.x,p.y,radius);
- relief.addColorStop(0,'#896a42');relief.addColorStop(.42,'#9c784b');relief.addColorStop(.67,'#b18b57');relief.addColorStop(.84,'#ecd09a');relief.addColorStop(1,'rgba(208,178,126,0)');
+ relief.addColorStop(0,'#9e703b');relief.addColorStop(.42,'#b58040');relief.addColorStop(.67,'#c69752');relief.addColorStop(.84,'#f0cf8a');relief.addColorStop(1,'rgba(208,178,126,0)');
  sg.fillStyle=relief;sg.fillRect(p.x-radius,p.y-radius,radius*2,radius*2);
+ if(photoReady&&photoBase.width){
+  sg.save();sg.beginPath();sg.arc(p.x,p.y,radius*.9,0,Math.PI*2);sg.clip();
+  sg.globalCompositeOperation='soft-light';sg.globalAlpha=.85;
+  sg.drawImage(photoBase,p.x-radius,p.y-radius,radius*2,radius*2,p.x-radius,p.y-radius,radius*2,radius*2);sg.restore();
+ }
 }
 function beginStroke(p){lastRubTime=0;drawing=true;previous={...p};furrow(p);}
 function endStroke(){drawing=false;previous=null;hushSand();}
@@ -169,7 +188,7 @@ function drawSample(p){
   const q={x:previous.x+dx*i/steps,y:previous.y+dy*i/steps};furrow(q);
   for(const side of [-1,1]){
    const offset=8+Math.random()*7,gx=q.x+nx*offset*side,gy=q.y+ny*offset*side;
-   sg.fillStyle=Math.random()<.5?'#ebcc92':'#ae8955';sg.fillRect(gx,gy,.7+Math.random(),.7+Math.random());
+   sg.fillStyle=Math.random()<.5?'#f2d28b':'#b28542';sg.fillRect(gx,gy,.7+Math.random(),.7+Math.random());
    if(i%3===0)grains.push({x:gx,y:gy,vx:nx*side*(12+Math.random()*35),vy:ny*side*(12+Math.random()*35)-12,life:0,ttl:.25+Math.random()*.3});
   }
  }previous={...p};if(grains.length>700)grains.splice(0,grains.length-700);
@@ -186,7 +205,7 @@ function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.s
 function frame(t){
  updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
  g.drawImage(sand,0,0,w,h);
- for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#f6dba5';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
+ for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#f3d695';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
  const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(44,27,8,.24)');g.fillStyle=shade;g.fillRect(0,0,w,h);
  drawHandCursor();requestAnimationFrame(frame);
 }requestAnimationFrame(frame);
