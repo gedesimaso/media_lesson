@@ -1,0 +1,194 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>손끝의 모래 · 샌드아트</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#29241d;color:#f4e4c6;font:15px system-ui}header{padding:20px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}h1{font-size:20px;margin:0}button,label{background:#493b2c;border:1px solid #806848;border-radius:8px;padding:10px;color:inherit}button{font:inherit;cursor:pointer}input{max-width:180px}main{position:relative}canvas{width:100%;height:65vh;min-height:380px;display:block;touch-action:none}p{margin:12px 20px;line-height:1.6}#preview{width:120px;height:145px;object-fit:cover;border:2px solid #a2edc7;border-radius:50%;background:#16372e}aside{display:flex;align-items:center;gap:12px;padding:12px 20px;flex-wrap:wrap}aside>div{flex:1;min-width:220px}aside label{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}#preview{flex-shrink:0;min-height:0;transform:none}small{display:block;color:#abd2c2}button:disabled{opacity:.5}select{font:inherit;max-width:100%}#handPreview{width:min(320px,100%);height:auto;min-height:0;background:#0b1e18}</style>
+<header><h1>손끝의 모래 · 샌드아트</h1><button id="start">웹캠 켜기</button><button id="stop" disabled>웹캠 끄기</button><button id="clearSand">모래 고르기</button><label>입력 <select id="inputMode"><option value="hand">손 인식</option><option value="mouse">마우스 테스트</option></select></label><label>그리기 <select id="drawMode"><option value="pinch">엄지·검지 붙이기</option><option value="always">검지 끝으로 바로 그리기</option></select></label><label><input id="showSkeleton" type="checkbox" checked> 손 스켈레톤 보기</label></header>
+<p id="status" role="status">웹캠을 켜고 한 손을 보여주세요. 엄지·검지를 붙여 모래를 그리고, 떼면 멈춥니다. 마우스 테스트에서는 누른 채 드래그하세요.</p><p id="handStatus" role="status">손 인식 대기 중</p>
+<main><canvas id="scene" aria-label="검지로 모래를 밀어 그림을 그리는 모래판"></canvas></main>
+<aside><canvas id="handPreview" width="320" height="180" aria-label="거울 방향 웹캠 영상과 손 스켈레톤"></canvas><video id="camera" autoplay muted playsinline hidden></video><canvas id="preview" width="240" height="290" aria-label="요정에 들어가는 확대된 얼굴 미리보기"></canvas><div><span id="tracking" role="status">웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.</span><br><label>얼굴 확대 <input id="faceZoom" type="range" min="0.8" max="3" step="0.05" value="1"><output id="zoomValue">1.00배</output></label><small>자동 인식 준비에는 인터넷 연결이 필요합니다.<br>웹캠 영상은 기기 안에서 처리하며 업로드·녹화하지 않습니다.</small></div></aside>
+<script>
+(()=>{'use strict';const c=document.getElementById('scene'),screenContext=c.getContext('2d'),v=document.getElementById('camera'),status=document.getElementById('status'),start=document.getElementById('start'),stop=document.getElementById('stop');let stream=null,w=900,h=500,drawing=false;const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const g=screenContext;
+const preview=document.getElementById('preview'),pg=preview.getContext('2d'),tracking=document.getElementById('tracking'),faceZoom=document.getElementById('faceZoom');
+let detector=null,detectorLoading=null,faceBox=null,lastFaceSeen=-Infinity,lastDetect=-Infinity,lastVideoTime=-1,trackingFailed=false;
+faceZoom.oninput=()=>document.getElementById('zoomValue').value=Number(faceZoom.value).toFixed(2)+'배';
+async function prepareFaceDetector(){
+ if(detector)return detector;
+ if(detectorLoading)return detectorLoading;
+ tracking.textContent='얼굴 자동 확대를 준비하고 있어요…';
+ detectorLoading=(async()=>{
+  const {FaceDetector,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');
+  const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');
+  detector=await FaceDetector.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'},runningMode:'VIDEO',minDetectionConfidence:0.4});
+  trackingFailed=false;return detector;
+ })().catch(e=>{trackingFailed=true;detectorLoading=null;if(stream)tracking.textContent='자동 인식을 불러오지 못했어요. 인터넷 연결을 확인하고 웹캠을 다시 켜주세요. 확대 슬라이더로 직접 조절할 수도 있어요.';return null;});
+ return detectorLoading;
+}
+function updateFace(t){
+ if(!stream||v.readyState<2)return;
+ if(detector&&!trackingFailed&&t-lastDetect>=100&&v.currentTime!==lastVideoTime){
+  lastDetect=t;lastVideoTime=v.currentTime;
+  try{
+   const faces=detector.detectForVideo(v,t).detections;
+   const selected=faces.reduce((best,item)=>!best||item.boundingBox.width*item.boundingBox.height>best.boundingBox.width*best.boundingBox.height?item:best,null);
+   if(selected){const b=selected.boundingBox,next={cx:b.originX+b.width/2,cy:b.originY+b.height/2,width:b.width,height:b.height};
+    if(!faceBox||t-lastFaceSeen>800)faceBox=next;
+    else for(const key of ['cx','cy','width','height'])faceBox[key]+=(next[key]-faceBox[key])*.4;
+    lastFaceSeen=t;tracking.textContent='얼굴 인식 중 · 거리에 맞춰 자동으로 확대하고 있어요.';
+   }else if(t-lastFaceSeen>800){faceBox=null;tracking.textContent='얼굴을 찾고 있어요. 카메라를 바라봐 주세요. 너무 멀거나 어두우면 가까이 와주세요.';}
+  }catch(e){trackingFailed=true;faceBox=null;tracking.textContent='자동 인식이 멈췄어요. 웹캠을 다시 켜주세요. 확대 슬라이더로 직접 조절할 수도 있어요.';}
+ }
+ if(faceBox&&t-lastFaceSeen>800)faceBox=null;
+ const crop=faceCrop(v.videoWidth,v.videoHeight,faceBox,Number(faceZoom.value));
+ pg.clearRect(0,0,preview.width,preview.height);pg.save();pg.translate(preview.width,0);pg.scale(-1,1);pg.drawImage(v,crop.x,crop.y,crop.width,crop.height,0,0,preview.width,preview.height);pg.restore();
+}
+function faceCrop(vw,vh,box,zoom){
+ const ratio=46/58;
+ let ch=box?Math.max(box.height*1.08,box.width*1.05/ratio):vh;
+ ch=Math.min(vh,vw/ratio,ch/zoom);const cw=ch*ratio;
+ const cx=box?box.cx:vw/2,cy=box?box.cy-box.height*.025:vh/2;
+ return {x:Math.max(0,Math.min(vw-cw,cx-cw/2)),y:Math.max(0,Math.min(vh-ch,cy-ch/2)),width:cw,height:ch};
+}
+
+
+const inputMode=document.getElementById('inputMode'),drawMode=document.getElementById('drawMode'),showSkeleton=document.getElementById('showSkeleton'),handStatus=document.getElementById('handStatus'),handPreview=document.getElementById('handPreview'),hg=handPreview.getContext('2d');
+let handDetector=null,handLoading=null,handFailed=false,lastHandDetect=-Infinity,lastHandVideo=-1,handPoints=null,handPointer=null,pinching=false;
+const HAND_LINKS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
+function resetHand(){endStroke();handPoints=null;handPointer=null;pinching=false;lastHandVideo=-1;lastHandDetect=-Infinity;}
+inputMode.onchange=()=>{resetHand();status.textContent=inputMode.value==='hand'?'엄지·검지를 붙여 모래를 그리고 떼면 멈춥니다.':'마우스 버튼을 누른 채 모래를 그려보세요.';if(stream&&inputMode.value==='hand')void prepareHandDetector();};
+drawMode.onchange=resetHand;
+async function prepareHandDetector(){
+ if(handDetector){handFailed=false;return handDetector;}
+ if(handLoading)return handLoading;
+ handStatus.textContent='손 인식 모델을 불러오고 있어요…';
+ handLoading=(async()=>{const {HandLandmarker,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');handDetector=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},runningMode:'VIDEO',numHands:1,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});handFailed=false;if(stream)handStatus.textContent='준비됐어요. 카메라에 손바닥과 손가락을 보여주세요.';return handDetector;})().catch(e=>{handLoading=null;handFailed=true;if(stream)handStatus.textContent='손 인식을 불러오지 못했어요. 인터넷·카메라 권한을 확인하고 웹캠을 다시 켜주세요. 마우스 테스트도 선택할 수 있어요.';return null;});return handLoading;
+}
+function pixelDistance(a,b){return Math.hypot((a.x-b.x)*v.videoWidth,(a.y-b.y)*v.videoHeight);}
+function processHand(points){
+ if(inputMode.value!=='hand')return;
+ if(!points){if(handPoints||drawing)resetHand();handStatus.textContent='손을 찾고 있어요. 한 손 전체를 카메라에 보여주세요.';return;}
+ handPoints=points;
+ const raw={x:Math.max(0,Math.min(w,(1-points[8].x)*w)),y:Math.max(0,Math.min(h,points[8].y*h))};
+ handPointer=handPointer?{x:handPointer.x+(raw.x-handPointer.x)*.65,y:handPointer.y+(raw.y-handPointer.y)*.65}:raw;
+ const palm=Math.max(1,pixelDistance(points[0],points[9])),ratio=pixelDistance(points[4],points[8])/palm;
+ pinching=pinching?ratio<.62:ratio<.42;
+ const paint=drawMode.value==='always'||pinching;
+ if(paint){if(!drawing)beginStroke(handPointer);else drawSample(handPointer);handStatus.textContent='모래를 밀고 있어요 · 손가락을 떼면 자국이 남아요.';}
+ else{endStroke();handStatus.textContent='손 인식 중 · 엄지와 검지를 붙이면 그리기 시작해요.';}
+}
+function updateHand(t){
+ if(!stream||v.readyState<2||inputMode.value!=='hand')return;
+ if(handDetector&&!handFailed&&t-lastHandDetect>=50&&v.currentTime!==lastHandVideo){lastHandDetect=t;lastHandVideo=v.currentTime;try{const result=handDetector.detectForVideo(v,t);processHand(result.landmarks[0]||null);}catch(e){handFailed=true;resetHand();handStatus.textContent='손 인식이 멈췄어요. 웹캠을 껐다가 다시 켜주세요.';}}
+}
+function renderHandPreview(){
+ hg.clearRect(0,0,handPreview.width,handPreview.height);
+ if(!stream||v.readyState<2)return;
+ hg.save();hg.translate(handPreview.width,0);hg.scale(-1,1);hg.drawImage(v,0,0,handPreview.width,handPreview.height);hg.restore();
+ if(showSkeleton.checked&&handPoints){hg.strokeStyle='#7df3b7';hg.lineWidth=2;for(const [a,b] of HAND_LINKS){hg.beginPath();hg.moveTo((1-handPoints[a].x)*320,handPoints[a].y*180);hg.lineTo((1-handPoints[b].x)*320,handPoints[b].y*180);hg.stroke();}for(let i=0;i<handPoints.length;i++){const p=handPoints[i];hg.fillStyle=i===8?'#ffce70':'#bcffe0';hg.beginPath();hg.arc((1-p.x)*320,p.y*180,i===8?5:2.5,0,Math.PI*2);hg.fill();}}
+}
+function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.save();g.strokeStyle=drawing?'#ffd18b':'#b4ead4';g.lineWidth=2;g.beginPath();g.arc(handPointer.x,handPointer.y,drawing?7:11,0,Math.PI*2);g.stroke();g.restore();}
+
+
+const sand=document.createElement('canvas'),sg=sand.getContext('2d');
+let previous=null,grains=[],lastFrame=0,seed=12345;
+
+// Locally synthesized dry sand friction: filtered, softly modulated noise.
+let sandAudio=null,lastRubTime=0;
+function unlockSandAudio(){
+ try{
+  if(!sandAudio){
+   const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;
+   const context=new Audio(),source=context.createBufferSource();
+   const buffer=context.createBuffer(1,context.sampleRate*3,context.sampleRate),data=buffer.getChannelData(0);
+   let low=0,texture=0;
+   for(let i=0;i<data.length;i++){
+    const white=Math.random()*2-1;low=.96*low+.04*white;texture=.997*texture+.003*(Math.random()*2-1);
+    data[i]=(white*.52+low*2.8)*(.65+Math.min(.35,Math.abs(texture)*9));
+   }
+   source.buffer=buffer;source.loop=true;
+   const high=context.createBiquadFilter();high.type='highpass';high.frequency.value=450;
+   const lowpass=context.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=4200;lowpass.Q.value=.5;
+   const gain=context.createGain();gain.gain.value=0;
+   source.connect(high);high.connect(lowpass);lowpass.connect(gain);gain.connect(context.destination);source.start();
+   sandAudio={context,source,gain,lowpass};
+  }
+  if(sandAudio.context.state==='suspended')void sandAudio.context.resume().catch(()=>{});
+ }catch{/* Drawing remains available when audio is unavailable. */}
+}
+document.addEventListener('pointerdown',unlockSandAudio,{capture:true});
+document.addEventListener('keydown',unlockSandAudio,{capture:true});
+function hushSand(){
+ lastRubTime=0;if(!sandAudio)return;
+ const now=sandAudio.context.currentTime,param=sandAudio.gain.gain;
+ param.cancelScheduledValues(now);param.setTargetAtTime(0,now,.018);
+}
+function rubSand(distance){
+ const stamp=performance.now(),elapsed=lastRubTime?Math.max(8,stamp-lastRubTime):35;lastRubTime=stamp;
+ if(!sandAudio||sandAudio.context.state!=='running')return;
+ const speed=Math.min(1,distance/elapsed/1.1),now=sandAudio.context.currentTime;
+ const volume=.035+speed*.15,param=sandAudio.gain.gain;
+ param.cancelScheduledValues(now);param.setTargetAtTime(volume,now,.012);
+ // Movement renews the sound; holding still fades to silence automatically.
+ param.setTargetAtTime(0,now+.065,.028);
+ sandAudio.lowpass.frequency.setTargetAtTime(2200+speed*3300,now,.025);
+ sandAudio.source.playbackRate.setTargetAtTime(.8+speed*.45,now,.025);
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)resetHand();});
+
+function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;}
+function fillSand(){
+ seed=12345;const image=sg.createImageData(sand.width,sand.height);
+ for(let y=0;y<sand.height;y++)for(let x=0;x<sand.width;x++){
+  const i=(y*sand.width+x)*4,noise=(random()-.5)*31;
+  const ripple=Math.sin(y*.048+Math.sin(x*.007)*2.4)*2.8;
+  const light=9*(1-x/sand.width)-10*y/sand.height+ripple+noise;
+  image.data[i]=196+light;image.data[i+1]=163+light;image.data[i+2]=111+light;image.data[i+3]=255;
+ }sg.putImageData(image,0,0);
+}
+function size(){
+ const old=document.createElement('canvas');old.width=sand.width;old.height=sand.height;old.getContext('2d').drawImage(sand,0,0);
+ const r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);w=r.width;h=r.height;c.width=Math.round(w*d);c.height=Math.round(h*d);g.setTransform(d,0,0,d,0,0);
+ sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(old.width&&old.height)sg.drawImage(old,0,0,w,h);endStroke();grains=[];
+}
+new ResizeObserver(size).observe(c);size();
+function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
+function furrow(p){
+ const radius=10;
+ const relief=sg.createRadialGradient(p.x-2,p.y-2,0,p.x,p.y,radius);
+ relief.addColorStop(0,'#896a42');relief.addColorStop(.42,'#9c784b');relief.addColorStop(.67,'#b18b57');relief.addColorStop(.84,'#ecd09a');relief.addColorStop(1,'rgba(208,178,126,0)');
+ sg.fillStyle=relief;sg.fillRect(p.x-radius,p.y-radius,radius*2,radius*2);
+}
+function beginStroke(p){lastRubTime=0;drawing=true;previous={...p};furrow(p);}
+function endStroke(){drawing=false;previous=null;hushSand();}
+function drawSample(p){
+ if(!drawing)return;if(!previous){beginStroke(p);return;}
+ const dx=p.x-previous.x,dy=p.y-previous.y,distance=Math.hypot(dx,dy);if(distance<.7)return;
+ // Lost tracking must never cut a long line across the board.
+ if(distance>Math.max(100,Math.min(w,h)*.24)){previous={...p};hushSand();return;}
+ rubSand(distance);
+ const nx=-dy/distance,ny=dx/distance,steps=Math.ceil(distance/1.4);
+ for(let i=1;i<=steps;i++){
+  const q={x:previous.x+dx*i/steps,y:previous.y+dy*i/steps};furrow(q);
+  for(const side of [-1,1]){
+   const offset=8+Math.random()*7,gx=q.x+nx*offset*side,gy=q.y+ny*offset*side;
+   sg.fillStyle=Math.random()<.5?'#ebcc92':'#ae8955';sg.fillRect(gx,gy,.7+Math.random(),.7+Math.random());
+   if(i%3===0)grains.push({x:gx,y:gy,vx:nx*side*(12+Math.random()*35),vy:ny*side*(12+Math.random()*35)-12,life:0,ttl:.25+Math.random()*.3});
+  }
+ }previous={...p};if(grains.length>700)grains.splice(0,grains.length-700);
+}
+c.addEventListener('pointerdown',e=>{if(inputMode.value!=='mouse'||e.button!==0)return;beginStroke(point(e));c.setPointerCapture(e.pointerId);});
+c.addEventListener('pointermove',e=>{if(inputMode.value!=='mouse'||!drawing)return;const samples=e.getCoalescedEvents?.()||[];for(const q of samples.length?samples:[e])drawSample(point(q));});
+function release(e){if(inputMode.value!=='mouse')return;endStroke();if(c.hasPointerCapture(e.pointerId))c.releasePointerCapture(e.pointerId);}
+c.addEventListener('pointerup',release);c.addEventListener('pointercancel',release);c.addEventListener('lostpointercapture',()=>{if(inputMode.value==='mouse')endStroke();});
+window.addEventListener('blur',()=>resetHand());
+document.getElementById('clearSand').onclick=()=>{resetHand();grains=[];fillSand();status.textContent='모래를 평평하게 골랐어요. 새 그림을 그려보세요.';};
+start.onclick=async()=>{start.disabled=true;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('localhost 또는 HTTPS 주소에서 열어주세요.');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});v.srcObject=stream;await v.play();lastVideoTime=-1;lastDetect=-Infinity;trackingFailed=false;stop.disabled=false;void prepareFaceDetector();if(inputMode.value==='hand')void prepareHandDetector();status.textContent='웹캠이 켜졌어요. 엄지·검지를 붙여 모래를 그려보세요.';}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;start.disabled=false;status.textContent='카메라를 켜지 못했어요. 브라우저 카메라 권한과 다른 앱의 사용 여부를 확인해주세요. '+e.message;}};
+function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.srcObject=null;resetHand();handStatus.textContent='손 인식 대기 중';hg.clearRect(0,0,320,180);faceBox=null;lastFaceSeen=-Infinity;pg.clearRect(0,0,preview.width,preview.height);tracking.textContent='웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.';start.disabled=false;stop.disabled=true;status.textContent='웹캠을 껐어요. 마우스 테스트로 모래를 그릴 수 있어요.';}stop.onclick=end;window.addEventListener('pagehide',end);
+
+function frame(t){
+ updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
+ g.drawImage(sand,0,0,w,h);
+ for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#f6dba5';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
+ const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(44,27,8,.24)');g.fillStyle=shade;g.fillRect(0,0,w,h);
+ drawHandCursor();requestAnimationFrame(frame);
+}requestAnimationFrame(frame);
+})();
+</script></html>
