@@ -1,7 +1,7 @@
 <!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>손끝의 모래 · 샌드아트</title>
 <style>*{box-sizing:border-box}body{margin:0;background:#29241d;color:#f4e4c6;font:15px system-ui}header{padding:20px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}h1{font-size:20px;margin:0}button,label{background:#493b2c;border:1px solid #806848;border-radius:8px;padding:10px;color:inherit}button{font:inherit;cursor:pointer}input{max-width:180px}main{position:relative}canvas{width:100%;height:65vh;min-height:380px;display:block;touch-action:none}p{margin:12px 20px;line-height:1.6}#preview{width:120px;height:145px;object-fit:cover;border:2px solid #a2edc7;border-radius:50%;background:#16372e}aside{display:flex;align-items:center;gap:12px;padding:12px 20px;flex-wrap:wrap}aside>div{flex:1;min-width:220px}aside label{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}#preview{flex-shrink:0;min-height:0;transform:none}small{display:block;color:#abd2c2}button:disabled{opacity:.5}select{font:inherit;max-width:100%}#handPreview{width:min(320px,100%);height:auto;min-height:0;background:#0b1e18}</style>
-<header><h1>손끝의 모래 · 샌드아트</h1><button id="start">웹캠 켜기</button><button id="stop" disabled>웹캠 끄기</button><button id="clearSand">모래 고르기</button><label>입력 <select id="inputMode"><option value="hand">손 인식</option><option value="mouse">마우스 테스트</option></select></label><label>그리기 <select id="drawMode"><option value="pinch">엄지·검지 붙이기</option><option value="always">검지 끝으로 바로 그리기</option></select></label><label><input id="showSkeleton" type="checkbox" checked> 손 스켈레톤 보기</label></header>
-<p id="status" role="status">웹캠을 켜고 한 손을 보여주세요. 엄지·검지를 붙여 모래를 그리고, 떼면 멈춥니다. 마우스 테스트에서는 누른 채 드래그하세요.</p><p id="handStatus" role="status">손 인식 대기 중</p>
+<header><h1>손끝의 모래 · 샌드아트</h1><button id="start">웹캠 켜기</button><button id="stop" disabled>웹캠 끄기</button><button id="clearSand">모래 고르기</button><label>입력 <select id="inputMode"><option value="hand">손 인식</option><option value="mouse">마우스 테스트</option></select></label><span>검지만 펴기: 그리기 · 손끝 모으기: 모래 쓸기</span><select id="drawMode" hidden><option value="index">검지만 펴기</option></select><label><input id="showSkeleton" type="checkbox" checked> 손 스켈레톤 보기</label></header>
+<p id="status" role="status">검지만 펴면 그려지고, 다른 손 모양에서는 멈춥니다. 다섯 손끝을 모아 움직이면 모래를 쓸어 모읍니다.</p><p id="handStatus" role="status">손 인식 대기 중</p>
 <main><canvas id="scene" aria-label="검지로 모래를 밀어 그림을 그리는 모래판"></canvas></main>
 <aside><canvas id="handPreview" width="320" height="180" aria-label="거울 방향 웹캠 영상과 손 스켈레톤"></canvas><video id="camera" autoplay muted playsinline hidden></video><canvas id="preview" width="240" height="290" aria-label="요정에 들어가는 확대된 얼굴 미리보기"></canvas><div><span id="tracking" role="status">웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.</span><br><label>얼굴 확대 <input id="faceZoom" type="range" min="0.8" max="3" step="0.05" value="1"><output id="zoomValue">1.00배</output></label><small>자동 인식 준비에는 인터넷 연결이 필요합니다.<br>웹캠 영상은 기기 안에서 처리하며 업로드·녹화하지 않습니다.</small></div></aside>
 <script>
@@ -52,8 +52,9 @@ function faceCrop(vw,vh,box,zoom){
 const inputMode=document.getElementById('inputMode'),drawMode=document.getElementById('drawMode'),showSkeleton=document.getElementById('showSkeleton'),handStatus=document.getElementById('handStatus'),handPreview=document.getElementById('handPreview'),hg=handPreview.getContext('2d');
 let handDetector=null,handLoading=null,handFailed=false,lastHandDetect=-Infinity,lastHandVideo=-1,handPoints=null,handPointer=null,pinching=false;
 const HAND_LINKS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
-function resetHand(){endStroke();handPoints=null;handPointer=null;pinching=false;lastHandVideo=-1;lastHandDetect=-Infinity;}
-inputMode.onchange=()=>{resetHand();status.textContent=inputMode.value==='hand'?'엄지·검지를 붙여 모래를 그리고 떼면 멈춥니다.':'마우스 버튼을 누른 채 모래를 그려보세요.';if(stream&&inputMode.value==='hand')void prepareHandDetector();};
+let gestureCandidate="idle",gestureCount=0,handAction="idle",sweepPrevious=null;
+function resetHand(){handAction="idle";gestureCandidate="idle";gestureCount=0;sweepPrevious=null;endStroke();handPoints=null;handPointer=null;pinching=false;lastHandVideo=-1;lastHandDetect=-Infinity;}
+inputMode.onchange=()=>{resetHand();status.textContent=inputMode.value==='hand'?'검지만 펴서 그리거나 손끝을 모아 모래를 쓸어보세요.':'마우스 버튼을 누른 채 모래를 그려보세요.';if(stream&&inputMode.value==='hand')void prepareHandDetector();};
 drawMode.onchange=resetHand;
 async function prepareHandDetector(){
  if(handDetector){handFailed=false;return handDetector;}
@@ -62,17 +63,32 @@ async function prepareHandDetector(){
  handLoading=(async()=>{const {HandLandmarker,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');handDetector=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},runningMode:'VIDEO',numHands:1,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});handFailed=false;if(stream)handStatus.textContent='준비됐어요. 카메라에 손바닥과 손가락을 보여주세요.';return handDetector;})().catch(e=>{handLoading=null;handFailed=true;if(stream)handStatus.textContent='손 인식을 불러오지 못했어요. 인터넷·카메라 권한을 확인하고 웹캠을 다시 켜주세요. 마우스 테스트도 선택할 수 있어요.';return null;});return handLoading;
 }
 function pixelDistance(a,b){return Math.hypot((a.x-b.x)*v.videoWidth,(a.y-b.y)*v.videoHeight);}
+function classifyHand(points){
+ const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y,(a.z||0)-(b.z||0));
+ const angle=(a,b,c)=>{const u=[a.x-b.x,a.y-b.y,(a.z||0)-(b.z||0)],v=[c.x-b.x,c.y-b.y,(c.z||0)-(b.z||0)];return Math.acos(Math.max(-1,Math.min(1,u.reduce((n,x,i)=>n+x*v[i],0)/(Math.hypot(...u)*Math.hypot(...v)||1))))*180/Math.PI;};
+ const palm=Math.max(.025,dist(points[0],points[9]));
+ const extended=(m,p,t)=>angle(points[m],points[p],points[t])>155&&dist(points[t],points[0])>dist(points[p],points[0])+palm*.18;
+ const fingers=[[5,6,8],[9,10,12],[13,14,16],[17,18,20]].map(([m,p,t])=>extended(m,p,t));
+ const tips=[4,8,12,16,20].map(i=>points[i]),center={x:tips.reduce((n,p)=>n+p.x,0)/5,y:tips.reduce((n,p)=>n+p.y,0)/5,z:tips.reduce((n,p)=>n+(p.z||0),0)/5};
+ const gathered=Math.max(...tips.map(p=>dist(p,center)))<palm*.48&&dist(center,points[0])>palm*1.15;
+ if(gathered)return {action:'sweep',point:center};
+ const thumbOut=dist(points[4],points[5])>palm*.85;
+ return {action:fingers[0]&&!fingers[1]&&!fingers[2]&&!fingers[3]&&!thumbOut?'draw':'idle',point:points[8]};
+}
 function processHand(points){
  if(inputMode.value!=='hand')return;
- if(!points){if(handPoints||drawing)resetHand();handStatus.textContent='손을 찾고 있어요. 한 손 전체를 카메라에 보여주세요.';return;}
- handPoints=points;
- const raw={x:Math.max(0,Math.min(w,(1-points[8].x)*w)),y:Math.max(0,Math.min(h,points[8].y*h))};
- handPointer=handPointer?{x:handPointer.x+(raw.x-handPointer.x)*.65,y:handPointer.y+(raw.y-handPointer.y)*.65}:raw;
- const palm=Math.max(1,pixelDistance(points[0],points[9])),ratio=pixelDistance(points[4],points[8])/palm;
- pinching=pinching?ratio<.62:ratio<.42;
- const paint=drawMode.value==='always'||pinching;
- if(paint){if(!drawing)beginStroke(handPointer);else drawSample(handPointer);handStatus.textContent='모래를 밀고 있어요 · 손가락을 떼면 자국이 남아요.';}
- else{endStroke();handStatus.textContent='손 인식 중 · 엄지와 검지를 붙이면 그리기 시작해요.';}
+ if(!points){resetHand();handStatus.textContent='손을 찾고 있어요. 한 손 전체를 보여주세요.';return;}
+ handPoints=points;const next=classifyHand(points);
+ if(next.action!==handAction){endStroke();sweepPrevious=null;handAction='idle';}
+ if(next.action===gestureCandidate)gestureCount++;else{gestureCandidate=next.action;gestureCount=1;}
+ // Three agreeing samples start an action; one disagreeing sample stops it.
+ if(gestureCount>=3)handAction=next.action;
+ const raw={x:Math.max(0,Math.min(w,(1-next.point.x)*w)),y:Math.max(0,Math.min(h,next.point.y*h))};
+ if(!handPointer||Math.hypot(raw.x-handPointer.x,raw.y-handPointer.y)>Math.min(w,h)*.25){handPointer=raw;endStroke();sweepPrevious=null;}
+ else {const d=Math.hypot(raw.x-handPointer.x,raw.y-handPointer.y);if(d>2){const f=Math.min(.58,.22+d/100);handPointer={x:handPointer.x+(raw.x-handPointer.x)*f,y:handPointer.y+(raw.y-handPointer.y)*f};}}
+ if(handAction==='draw'){sweepPrevious=null;if(!drawing)beginStroke(handPointer);else drawSample(handPointer);handStatus.textContent='검지로 그리는 중 · 다른 손가락을 펴면 멈춰요.';}
+ else if(handAction==='sweep'){endStroke();if(sweepPrevious)sweepSand(sweepPrevious,handPointer);sweepPrevious={...handPointer};handStatus.textContent='모래 쓸기 · 모은 손끝으로 천천히 밀어보세요.';}
+ else{endStroke();sweepPrevious=null;handStatus.textContent='검지만 펴기: 그리기 · 다섯 손끝 모으기: 쓸기';}
 }
 function updateHand(t){
  if(!stream||v.readyState<2||inputMode.value!=='hand')return;
@@ -84,7 +100,7 @@ function renderHandPreview(){
  hg.save();hg.translate(handPreview.width,0);hg.scale(-1,1);hg.drawImage(v,0,0,handPreview.width,handPreview.height);hg.restore();
  if(showSkeleton.checked&&handPoints){hg.strokeStyle='#7df3b7';hg.lineWidth=2;for(const [a,b] of HAND_LINKS){hg.beginPath();hg.moveTo((1-handPoints[a].x)*320,handPoints[a].y*180);hg.lineTo((1-handPoints[b].x)*320,handPoints[b].y*180);hg.stroke();}for(let i=0;i<handPoints.length;i++){const p=handPoints[i];hg.fillStyle=i===8?'#ffce70':'#bcffe0';hg.beginPath();hg.arc((1-p.x)*320,p.y*180,i===8?5:2.5,0,Math.PI*2);hg.fill();}}
 }
-function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.save();g.strokeStyle=drawing?'#ffd18b':'#b4ead4';g.lineWidth=2;g.beginPath();g.arc(handPointer.x,handPointer.y,drawing?7:11,0,Math.PI*2);g.stroke();g.restore();}
+function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.save();g.strokeStyle=drawing?'#ffd18b':'#b4ead4';g.lineWidth=2;g.beginPath();g.arc(handPointer.x,handPointer.y,handAction==='sweep'?32:drawing?7:11,0,Math.PI*2);g.stroke();g.restore();}
 
 
 const sand=document.createElement('canvas'),sg=sand.getContext('2d');
@@ -156,10 +172,40 @@ function fillSand(){
   image.data[i]=196+light;image.data[i+1]=163+light;image.data[i+2]=111+light;image.data[i+3]=255;
  }sg.putImageData(image,0,0);
 }
+
+const pileLayer=document.createElement('canvas'),pileContext=pileLayer.getContext('2d');
+let mass=null,massCols=0,massRows=0,massDirty=true;const cell=10;
+function resetMass(){massCols=Math.ceil(w/cell);massRows=Math.ceil(h/cell);mass=new Float32Array(massCols*massRows).fill(1);pileLayer.width=massCols;pileLayer.height=massRows;massDirty=true;}
+function sweepSand(from,to){
+ const dx=to.x-from.x,dy=to.y-from.y,d=Math.hypot(dx,dy);if(d<2||d>100)return;
+ sandHasMarks=true;rubSand(d);const steps=Math.ceil(d/5),ux=dx/d,uy=dy/d;
+ for(let step=1;step<=steps;step++){
+  const cx=(from.x+dx*step/steps)/cell,cy=(from.y+dy*step/steps)/cell,delta=new Float32Array(mass.length);
+  for(let gy=Math.max(1,Math.floor(cy-4));gy<Math.min(massRows-1,cy+4);gy++)for(let gx=Math.max(1,Math.floor(cx-4));gx<Math.min(massCols-1,cx+4);gx++){
+   const rx=gx-cx,ry=gy-cy,r=Math.hypot(rx,ry);if(r>3.5)continue;
+   const source=gy*massCols+gx,side=rx*(-uy)+ry*ux;
+   const tx=Math.max(0,Math.min(massCols-1,Math.round(gx+ux*1.4+uy*side*.28))),ty=Math.max(0,Math.min(massRows-1,Math.round(gy+uy*1.4-ux*side*.28))),target=ty*massCols+tx;
+   const amount=mass[source]*.16*(1-r/3.5);delta[source]-=amount;delta[target]+=amount;
+  }
+  for(let i=0;i<mass.length;i++)mass[i]+=delta[i];
+  // Local avalanches spread a tall pile without creating or deleting sand.
+  for(let y=1;y<massRows-1;y++)for(let x=1;x<massCols-1;x++){const i=y*massCols+x;for(const j of [i+1,i+massCols]){const diff=mass[i]-mass[j];if(Math.abs(diff)>.55){const flow=(Math.abs(diff)-.55)*.12*Math.sign(diff);mass[i]-=flow;mass[j]+=flow;}}}
+ }
+ massDirty=true;
+ for(let i=0;i<8;i++)grains.push({x:to.x+(Math.random()-.5)*45,y:to.y+(Math.random()-.5)*45,vx:ux*(20+Math.random()*35),vy:uy*(20+Math.random()*35),life:0,ttl:.3+Math.random()*.3});
+}
+function drawPiles(){
+ if(massDirty){const image=pileContext.createImageData(massCols,massRows);for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
+  const i=y*massCols+x,value=mass[i],slope=(mass[i-1]||value)-(mass[i+1]||value)+(mass[i-massCols]||value)-(mass[i+massCols]||value);
+  const dark=value<1||slope<0,alpha=Math.min(.75,Math.abs(value-1)*.28+Math.abs(slope)*.16),k=i*4;
+  image.data[k]=dark?105:255;image.data[k+1]=dark?67:226;image.data[k+2]=dark?29:165;image.data[k+3]=alpha*255;
+ }pileContext.putImageData(image,0,0);massDirty=false;}g.drawImage(pileLayer,0,0,w,h);
+}
+
 function size(){
  const hadMarks=sandHasMarks;const old=document.createElement('canvas');old.width=sand.width;old.height=sand.height;old.getContext('2d').drawImage(sand,0,0);
  const r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);w=r.width;h=r.height;c.width=Math.round(w*d);c.height=Math.round(h*d);g.setTransform(d,0,0,d,0,0);
- sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(hadMarks&&old.width&&old.height){sg.drawImage(old,0,0,w,h);sandHasMarks=true;}endStroke();grains=[];
+ sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(hadMarks&&old.width&&old.height){sg.drawImage(old,0,0,w,h);sandHasMarks=true;}endStroke();grains=[];resetMass();
 }
 new ResizeObserver(size).observe(c);size();
 function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
@@ -198,13 +244,13 @@ c.addEventListener('pointermove',e=>{if(inputMode.value!=='mouse'||!drawing)retu
 function release(e){if(inputMode.value!=='mouse')return;endStroke();if(c.hasPointerCapture(e.pointerId))c.releasePointerCapture(e.pointerId);}
 c.addEventListener('pointerup',release);c.addEventListener('pointercancel',release);c.addEventListener('lostpointercapture',()=>{if(inputMode.value==='mouse')endStroke();});
 window.addEventListener('blur',()=>resetHand());
-document.getElementById('clearSand').onclick=()=>{resetHand();grains=[];fillSand();status.textContent='모래를 평평하게 골랐어요. 새 그림을 그려보세요.';};
-start.onclick=async()=>{start.disabled=true;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('localhost 또는 HTTPS 주소에서 열어주세요.');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});v.srcObject=stream;await v.play();lastVideoTime=-1;lastDetect=-Infinity;trackingFailed=false;stop.disabled=false;void prepareFaceDetector();if(inputMode.value==='hand')void prepareHandDetector();status.textContent='웹캠이 켜졌어요. 엄지·검지를 붙여 모래를 그려보세요.';}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;start.disabled=false;status.textContent='카메라를 켜지 못했어요. 브라우저 카메라 권한과 다른 앱의 사용 여부를 확인해주세요. '+e.message;}};
+document.getElementById('clearSand').onclick=()=>{resetHand();grains=[];fillSand();resetMass();status.textContent='모래를 평평하게 골랐어요. 새 그림을 그려보세요.';};
+start.onclick=async()=>{start.disabled=true;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('localhost 또는 HTTPS 주소에서 열어주세요.');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});v.srcObject=stream;await v.play();lastVideoTime=-1;lastDetect=-Infinity;trackingFailed=false;stop.disabled=false;void prepareFaceDetector();if(inputMode.value==='hand')void prepareHandDetector();status.textContent='웹캠이 켜졌어요. 검지만 펴서 그리거나 손끝을 모아 모래를 쓸어보세요.';}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;start.disabled=false;status.textContent='카메라를 켜지 못했어요. 브라우저 카메라 권한과 다른 앱의 사용 여부를 확인해주세요. '+e.message;}};
 function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.srcObject=null;resetHand();handStatus.textContent='손 인식 대기 중';hg.clearRect(0,0,320,180);faceBox=null;lastFaceSeen=-Infinity;pg.clearRect(0,0,preview.width,preview.height);tracking.textContent='웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.';start.disabled=false;stop.disabled=true;status.textContent='웹캠을 껐어요. 마우스 테스트로 모래를 그릴 수 있어요.';}stop.onclick=end;window.addEventListener('pagehide',end);
 
 function frame(t){
  updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
- g.drawImage(sand,0,0,w,h);
+ g.drawImage(sand,0,0,w,h);drawPiles();
  for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#f3d695';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
  const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(44,27,8,.24)');g.fillStyle=shade;g.fillRect(0,0,w,h);
  drawHandCursor();requestAnimationFrame(frame);
