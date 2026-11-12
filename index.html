@@ -24,6 +24,7 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
 .verse span:nth-child(2){font-family:"LXGW WenKai TC","Gungsuh","궁서",serif}
 #reflection{width:min(100%,39rem);margin:0;line-height:1.95;color:#e8e7e4;font-family:"궁서",Gungsuh,"GungSeo","궁서체",GungsuhChe,"LXGW WenKai KR",serif;font-size:clamp(1.12rem,3.4vw,1.72rem);text-align:left;word-break:keep-all;opacity:0;transition:opacity 1.45s ease}
 #reflection.visible{opacity:1}
+#reflection.visitor-left{transition-duration:.32s;}
 @media (prefers-reduced-motion:reduce){#reflection{transition:none}}
 #intro{position:fixed;z-index:1;inset:auto 16px max(13vh,64px);margin:0 auto;width:max-content;max-width:calc(100% - 32px);text-align:center;color:#e5eff8;font-size:clamp(1rem,3.8vw,1.38rem);line-height:1.55;word-break:keep-all;text-shadow:0 2px 16px #000;pointer-events:none;opacity:0;transition:opacity .65s ease}
 #intro.visible{opacity:1}
@@ -59,7 +60,7 @@ let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
 const closing=document.getElementById('closing'),verse=document.getElementById('verse');
 const reflection=document.getElementById('reflection'),intro=document.getElementById('intro');
-let introShown=false,introAt=null;
+let introShown=false,introAt=null,faceMissingSince=null;
 const glyphs=[...verse.querySelectorAll('span')];
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp01=value=>Math.max(0,Math.min(1,value));
@@ -72,7 +73,7 @@ function updateIntro(t){
 }
 function hideClosing(){
  closing.hidden=true;verse.hidden=false;reflection.hidden=true;
- reflection.classList.remove('visible');
+ reflection.classList.remove('visible','visitor-left');
  for(const glyph of glyphs){glyph.style.opacity='0';glyph.style.clipPath='';glyph.style.filter='';glyph.style.transform='';}
 }
 const faceOval=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
@@ -151,7 +152,7 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;introShown=false;hideIntro();hideClosing();clearSmoke();nextHit=0;erased.clear();
+ face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;introShown=false;faceMissingSince=null;hideIntro();hideClosing();clearSmoke();nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;reset.disabled=true;
 }
 stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.';};
@@ -177,6 +178,7 @@ function track(t){
  cameraTransform=transform;
  try{
   const landmarks=models.face.detectForVideo(video,t).faceLandmarks[0];
+  faceMissingSince=landmarks?null:(faceMissingSince??t);
   const hand=models.hand.detectForVideo(video,t).landmarks[0];
   face=landmarks?landmarks.map((point,id)=>{
    const projected=project(point,transform),old=face[id];
@@ -327,9 +329,19 @@ function updateFinale(dt,t=performance.now()){
   reflection.hidden=false;
   requestAnimationFrame(()=>{if(finale?.phase==='reflection')reflection.classList.add('visible');});
  }
- if(finale.phase==='reflection'&&finale.age>=readingTime){
-  reflection.classList.remove('visible');finale.phase='reflectionFade';finale.age=0;
- }else if(finale.phase==='reflectionFade'&&finale.age>=reflectionFade){
+ const visitorLeft=faceMissingSince!==null&&t-faceMissingSince>=550;
+ if(finale.phase==='reflection'&&(finale.age>=readingTime||visitorLeft)){
+  reflection.classList.toggle('visitor-left',visitorLeft);
+  reflection.classList.remove('visible');
+  finale.phase='reflectionFade';finale.age=0;
+  finale.quickRestart=visitorLeft;
+ }else if(finale.phase==='reflectionFade'){
+  if(visitorLeft&&!finale.quickRestart){
+   finale.quickRestart=true;
+   reflection.classList.add('visitor-left');
+  }
+  if(finale.age<(finale.quickRestart ? .34 : reflectionFade))return;
+  if(finale.quickRestart){restartExperience(t);return;}
   hideClosing();finale.phase='betweenVisitors';finale.age=0;
  }else if(finale.phase==='betweenVisitors'&&finale.age>=betweenVisitors){
   restartExperience(t);
