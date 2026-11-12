@@ -208,8 +208,23 @@ function touchPaths(paths,t,radius){
   }
  }
  if(closest<0)return false;
- erased.add(closest);nextHit=t+36;
- releaseSmoke(face[closest],drift);
+ const origin=face[closest];
+ const left=face[234],right=face[454];
+ const faceWidth=left&&right?Math.hypot(left.x-right.x,left.y-right.y):0;
+ const spread=Math.max(16,faceWidth*.105),limit=Math.max(24,faceWidth*.17);
+ const nearby=[];
+ for(let id=0;id<face.length;id++){
+  if(erased.has(id))continue;
+  const dot=face[id],distance=(dot.x-origin.x)**2+(dot.y-origin.y)**2;
+  if(distance<=limit*limit)nearby.push({id,distance});
+ }
+ nearby.sort((a,b)=>a.distance-b.distance);
+ const expanded=Math.max(spread*spread,nearby[Math.min(9,nearby.length-1)].distance);
+ const group=nearby.filter(dot=>dot.distance<=expanded).slice(0,18);
+ let x=0,y=0;
+ for(const {id} of group){erased.add(id);x+=face[id].x;y+=face[id].y;}
+ nextHit=t+36;
+ releaseSmoke({x:x/group.length,y:y/group.length},drift);
  if(erased.size===face.length&&face.length>152&&cameraTransform)beginFinale();
  return true;
 }
@@ -328,7 +343,7 @@ function drawPortrait(){
  if(!finale||!['portrait','burst'].includes(finale.phase))return;
  const alpha=finale.phase==='portrait'?Math.min(1,finale.age/.28):Math.max(0,1-finale.age/.27);
  if(alpha<=0)return;
- ctx.globalCompositeOperation='source-over';ctx.globalAlpha=alpha;
+ ctx.globalCompositeOperation='source-over';ctx.globalAlpha=alpha*.5;
  ctx.drawImage(portrait,0,0,frameWidth,frameHeight);
  ctx.globalAlpha=1;
 }
