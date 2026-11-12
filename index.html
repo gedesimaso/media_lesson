@@ -130,11 +130,10 @@ function renderHandPreview(){
 function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.save();g.strokeStyle=drawing?'#ffd18b':'#b4ead4';g.lineWidth=2;g.beginPath();g.arc(handPointer.x,handPointer.y,handAction==='sweep'?32:drawing?7:11,0,Math.PI*2);g.stroke();g.restore();}
 
 
-const sand=document.createElement('canvas'),sg=sand.getContext('2d');
 const photoBase=document.createElement('canvas'),photoContext=photoBase.getContext('2d'),sandPhoto=new Image();
-let photoReady=false,sandHasMarks=false;
+let photoReady=false;
 // ImageGen beach sand plate, with a neutral fallback while loading.
-sandPhoto.onload=()=>{photoReady=true;if(!sandHasMarks)fillSand();};
+sandPhoto.onload=()=>{photoReady=true;fillSand();};
 sandPhoto.onerror=()=>{photoReady=false;};
 sandPhoto.src='./white-beach-sand.jpg';
 let previous=null,grains=[],lastFrame=0,seed=12345;
@@ -183,100 +182,159 @@ function rubSand(distance){
 document.addEventListener('visibilitychange',()=>{if(document.hidden)resetHand();});
 
 function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;}
-const bed=document.createElement('canvas'),bedContext=bed.getContext('2d');
-const refillStamp=document.createElement('canvas'),refillContext=refillStamp.getContext('2d');
-function cacheBed(){
- bed.width=sand.width;bed.height=sand.height;
- bedContext.filter='brightness(.79) saturate(.76)';
- bedContext.drawImage(photoBase,0,0);
-}
 function fillSand(){
- sandHasMarks=false;
- sg.clearRect(0,0,sand.width,sand.height);
- photoBase.width=sand.width;photoBase.height=sand.height;
+ const width=photoBase.width=Math.ceil(w);
+ const height=photoBase.height=Math.ceil(h);
  if(photoReady){
-  const scale=Math.max(sand.width/sandPhoto.naturalWidth,sand.height/sandPhoto.naturalHeight);
-  photoContext.drawImage(sandPhoto,(sand.width-sandPhoto.naturalWidth*scale)/2,(sand.height-sandPhoto.naturalHeight*scale)/2,sandPhoto.naturalWidth*scale,sandPhoto.naturalHeight*scale);
-  sg.drawImage(photoBase,0,0);cacheBed();return;
+  const scale=Math.max(width/sandPhoto.naturalWidth,height/sandPhoto.naturalHeight);
+  const imageWidth=sandPhoto.naturalWidth*scale,imageHeight=sandPhoto.naturalHeight*scale;
+  photoContext.drawImage(sandPhoto,(width-imageWidth)/2,(height-imageHeight)/2,imageWidth,imageHeight);
+  return;
  }
- seed=12345;const image=sg.createImageData(sand.width,sand.height);
- for(let y=0;y<sand.height;y++)for(let x=0;x<sand.width;x++){
-  const i=(y*sand.width+x)*4,noise=(random()-.5)*31;
-  const ripple=Math.sin(y*.048+Math.sin(x*.007)*2.4)*2.8;
-  const light=9*(1-x/sand.width)-10*y/sand.height+ripple+noise;
-  image.data[i]=218+light;image.data[i+1]=209+light;image.data[i+2]=191+light;image.data[i+3]=255;
- }photoContext.putImageData(image,0,0);sg.drawImage(photoBase,0,0);cacheBed();
+ seed=12345;
+ const image=photoContext.createImageData(width,height);
+ for(let i=0;i<image.data.length;i+=4){
+  const noise=(random()-.5)*18;
+  image.data[i]=218+noise;
+  image.data[i+1]=209+noise;
+  image.data[i+2]=191+noise;
+  image.data[i+3]=255;
+ }
+ photoContext.putImageData(image,0,0);
 }
 
-const pileLayer=document.createElement('canvas'),pileContext=pileLayer.getContext('2d');
-let mass=null,massCols=0,massRows=0,massDirty=true;const cell=10;
-function resetMass(){massCols=Math.ceil(w/cell);massRows=Math.ceil(h/cell);mass=new Float32Array(massCols*massRows).fill(1);pileLayer.width=massCols;pileLayer.height=massRows;massDirty=true;}
-function sweepSand(from,to,gatherCenter){
- const dx=to.x-from.x,dy=to.y-from.y,d=Math.hypot(dx,dy);if(d<2||d>100)return;
- sandHasMarks=true;rubSand(d);const steps=Math.ceil(d/5),ux=dx/d,uy=dy/d;
- for(let step=1;step<=steps;step++){
-  const x=from.x+dx*step/steps,y=from.y+dy*step/steps;
-  refillSand(x,y,28);
-  const cx=x/cell,cy=y/cell,delta=new Float32Array(mass.length);
-  for(let gy=Math.max(1,Math.floor(cy-4));gy<Math.min(massRows-1,cy+4);gy++)for(let gx=Math.max(1,Math.floor(cx-4));gx<Math.min(massCols-1,cx+4);gx++){
-   const rx=gx-cx,ry=gy-cy,r=Math.hypot(rx,ry);if(r>3.5)continue;
-   const source=gy*massCols+gx,side=rx*(-uy)+ry*ux;
-   let pushX=ux*1.4+uy*side*.28,pushY=uy*1.4-ux*side*.28;
-   if(gatherCenter){
-    const mx=gatherCenter.x/cell-gx,my=gatherCenter.y/cell-gy;
-    const reach=Math.max(1,Math.hypot(mx,my)/3);
-    pushX=mx/reach;pushY=my/reach;
-   }
-   const tx=Math.max(0,Math.min(massCols-1,Math.round(gx+pushX)));
-   const ty=Math.max(0,Math.min(massRows-1,Math.round(gy+pushY)));
-   const target=ty*massCols+tx;
-   const amount=mass[source]*.16*(1-r/3.5);delta[source]-=amount;delta[target]+=amount;
-  }
-  for(let i=0;i<mass.length;i++)mass[i]+=delta[i];
-  // Local avalanches spread a tall pile without creating or deleting sand.
-  for(let y=1;y<massRows-1;y++)for(let x=1;x<massCols-1;x++){const i=y*massCols+x;for(const j of [i+1,i+massCols]){const diff=mass[i]-mass[j];if(Math.abs(diff)>.55){const flow=(Math.abs(diff)-.55)*.12*Math.sign(diff);mass[i]-=flow;mass[j]+=flow;}}}
- }
+const reliefLayer=document.createElement('canvas'),reliefContext=reliefLayer.getContext('2d');
+const cell=3;
+let mass,massCols,massRows,reliefPixels,massDirty=true;
+function resetMass(cols=Math.ceil(w/cell),rows=Math.ceil(h/cell)){
+ massCols=cols;massRows=rows;
+ mass=new Float32Array(cols*rows).fill(1);
+ reliefLayer.width=cols;reliefLayer.height=rows;
+ reliefPixels=reliefContext.createImageData(cols,rows);
  massDirty=true;
+}
+function transferSand(cx,cy,radius,transport){
+ const changes=new Map();
+ function add(index,amount){changes.set(index,(changes.get(index)||0)+amount);}
+ const reach=radius/cell;
+ for(let y=Math.max(0,Math.ceil(cy-reach));y<=Math.min(massRows-1,Math.floor(cy+reach));y++){
+  for(let x=Math.max(0,Math.ceil(cx-reach));x<=Math.min(massCols-1,Math.floor(cx+reach));x++){
+   const distance=Math.hypot(x-cx,y-cy)/reach;
+   if(distance>=1)continue;
+   transport(x,y,distance,(toX,toY,fraction)=>{
+    const source=y*massCols+x;
+    const targetX=Math.max(0,Math.min(massCols-1,toX));
+    const targetY=Math.max(0,Math.min(massRows-1,toY));
+    const amount=mass[source]*fraction;
+    const x0=Math.floor(targetX),y0=Math.floor(targetY);
+    const fx=targetX-x0,fy=targetY-y0;
+    add(source,-amount);
+    add(y0*massCols+x0,amount*(1-fx)*(1-fy));
+    if(fx)add(y0*massCols+x0+1,amount*fx*(1-fy));
+    if(fy)add((y0+1)*massCols+x0,amount*(1-fx)*fy);
+    if(fx&&fy)add((y0+1)*massCols+x0+1,amount*fx*fy);
+   });
+  }
+ }
+ for(const [index,amount] of changes)mass[index]+=amount;
+ massDirty=true;
+}
+function displaceStroke(from,to){
+ const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
+ if(distance===0)return;
+ const nx=-dy/distance,ny=dx/distance;
+ const steps=Math.ceil(distance/2.5);
+ const strength=1-Math.exp(-distance/steps*.24);
+ for(let step=1;step<=steps;step++){
+  const cx=(from.x+dx*step/steps)/cell-.5,cy=(from.y+dy*step/steps)/cell-.5;
+  transferSand(cx,cy,8,(x,y,r,move)=>{
+   const lateral=(x-cx)*nx+(y-cy)*ny;
+   const right=Math.max(0,Math.min(1,.5+lateral));
+   const centerX=x-lateral*nx,centerY=y-lateral*ny;
+   const amount=strength*(1-r*r)**2;
+   // Spread each ridge across the shoulder instead of forming a second sharp line.
+   for(const [offset,weight] of [[8.5,.28],[11,.48],[14,.24]]){
+    const ox=nx*offset/cell,oy=ny*offset/cell;
+    if(right)move(centerX+ox,centerY+oy,amount*right*weight);
+    if(right<1)move(centerX-ox,centerY-oy,amount*(1-right)*weight);
+   }
+  });
+ }
+}
+function sweepSand(from,to,gatherCenter){
+ const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
+ if(distance<2||distance>100)return;
+ rubSand(distance);
+ const steps=Math.ceil(distance/5),ux=dx/distance,uy=dy/distance;
+ for(let step=1;step<=steps;step++){
+  const cx=(from.x+dx*step/steps)/cell-.5,cy=(from.y+dy*step/steps)/cell-.5;
+  transferSand(cx,cy,35,(x,y,r,move)=>{
+   const side=(x-cx)*(-uy)+(y-cy)*ux;
+   let pushX=ux*14/cell+uy*side*.28,pushY=uy*14/cell-ux*side*.28;
+   if(gatherCenter){
+    pushX=gatherCenter.x/cell-.5-x;
+    pushY=gatherCenter.y/cell-.5-y;
+    const reach=Math.max(1,Math.hypot(pushX,pushY)/(25/cell));
+    pushX/=reach;pushY/=reach;
+   }
+   move(x+pushX,y+pushY,.16*(1-r));
+  });
+  settleSand(cx,cy);
+ }
  for(let i=0;i<8;i++)grains.push({x:to.x+(Math.random()-.5)*45,y:to.y+(Math.random()-.5)*45,vx:ux*(20+Math.random()*35),vy:uy*(20+Math.random()*35),life:0,ttl:.3+Math.random()*.3});
 }
-function drawPiles(){
- if(massDirty){const image=pileContext.createImageData(massCols,massRows);for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
-  const i=y*massCols+x,value=mass[i],slope=(mass[i-1]||value)-(mass[i+1]||value)+(mass[i-massCols]||value)-(mass[i+massCols]||value);
-  const dark=value<1||slope<0,alpha=Math.min(.75,Math.abs(value-1)*.28+Math.abs(slope)*.16),k=i*4;
-  image.data[k]=dark?112:255;image.data[k+1]=dark?102:247;image.data[k+2]=dark?87:227;image.data[k+3]=alpha*255;
- }pileContext.putImageData(image,0,0);massDirty=false;}g.save();g.globalCompositeOperation='soft-light';g.drawImage(pileLayer,0,0,w,h);g.restore();
+function settleSand(cx,cy){
+ const reach=Math.ceil(65/cell);
+ for(let y=Math.max(0,Math.floor(cy)-reach);y<Math.min(massRows-1,cy+reach);y++){
+  for(let x=Math.max(0,Math.floor(cx)-reach);x<Math.min(massCols-1,cx+reach);x++){
+   const i=y*massCols+x;
+   for(const j of [i+1,i+massCols]){
+    const difference=mass[i]-mass[j];
+    if(Math.abs(difference)<.24)continue;
+    const flow=(Math.abs(difference)-.24)*.17*Math.sign(difference);
+    mass[i]-=flow;mass[j]+=flow;
+   }
+  }
+ }
 }
-
+function drawRelief(){
+ if(massDirty){
+  const pixels=reliefPixels.data;
+  for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
+   const i=y*massCols+x,height=mass[i];
+   const slopeX=mass[x>0?i-1:i]-mass[x+1<massCols?i+1:i];
+   const slopeY=mass[y>0?i-massCols:i]-mass[y+1<massRows?i+massCols:i];
+   // Surface rising toward the lower right faces the light at the upper left.
+   const light=Math.max(-.32,Math.min(.32,-.36*(slopeX*.77+slopeY*.63)+Math.min(0,height-1)*.11));
+   const color=light<0?0:255;
+   pixels[i*4]=color;pixels[i*4+1]=color;pixels[i*4+2]=color;
+   pixels[i*4+3]=Math.abs(light)*255;
+  }
+  reliefContext.putImageData(reliefPixels,0,0);
+  massDirty=false;
+ }
+ g.drawImage(reliefLayer,0,0,massCols*cell,massRows*cell);
+}
 function size(){
- const hadMarks=sandHasMarks;const old=document.createElement('canvas');old.width=sand.width;old.height=sand.height;old.getContext('2d').drawImage(sand,0,0);
- const r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);w=r.width;h=r.height;c.width=Math.round(w*d);c.height=Math.round(h*d);g.setTransform(d,0,0,d,0,0);
- sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(hadMarks&&old.width&&old.height){sg.clearRect(0,0,sand.width,sand.height);sg.drawImage(old,0,0,w,h);sandHasMarks=true;}endStroke();grains=[];resetMass();
+ const bounds=c.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
+ const pixelWidth=Math.round(bounds.width*dpr),pixelHeight=Math.round(bounds.height*dpr);
+ if(mass&&w===bounds.width&&h===bounds.height&&c.width===pixelWidth&&c.height===pixelHeight)return;
+ const oldMass=mass,oldCols=massCols,oldRows=massRows;
+ w=bounds.width;h=bounds.height;c.width=pixelWidth;c.height=pixelHeight;
+ g.setTransform(dpr,0,0,dpr,0,0);
+ fillSand();resetMass();
+ if(oldMass){
+  for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
+   const oldX=Math.min(oldCols-1,Math.floor((x+.5)*oldCols/massCols));
+   const oldY=Math.min(oldRows-1,Math.floor((y+.5)*oldRows/massRows));
+   mass[y*massCols+x]=oldMass[oldY*oldCols+oldX];
+  }
+ }
+ resetHand();grains=[];
 }
 new ResizeObserver(size).observe(c);size();
 function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
-function refillSand(x,y,radius){
- const side=radius*2;
- refillStamp.width=side;refillStamp.height=side;
- refillContext.drawImage(photoBase,radius-x,radius-y);
- refillContext.globalCompositeOperation='destination-in';
- const edge=refillContext.createRadialGradient(radius,radius,radius*.55,radius,radius,radius);
- edge.addColorStop(0,'#fff');edge.addColorStop(1,'rgba(255,255,255,0)');
- refillContext.fillStyle=edge;refillContext.fillRect(0,0,side,side);
- sg.drawImage(refillStamp,x-radius,y-radius);
-}
-function furrow(p){
- sandHasMarks=true;
- const radius=9;
- const edge=sg.createRadialGradient(p.x,p.y,radius*.48,p.x,p.y,radius);
- edge.addColorStop(0,'#000');edge.addColorStop(.75,'rgba(0,0,0,.42)');
- edge.addColorStop(1,'rgba(0,0,0,0)');
- sg.save();
- sg.globalCompositeOperation='destination-out';
- sg.fillStyle=edge;
- sg.fillRect(p.x-radius,p.y-radius,radius*2,radius*2);
- sg.restore();
-}
-function beginStroke(p){lastRubTime=0;drawing=true;previous={...p};furrow(p);}
+function beginStroke(p){lastRubTime=0;drawing=true;previous={...p};}
 function endStroke(){drawing=false;previous=null;hushSand();}
 function drawSample(p){
  if(!drawing)return;if(!previous){beginStroke(p);return;}
@@ -284,16 +342,10 @@ function drawSample(p){
  // Lost tracking must never cut a long line across the board.
  if(distance>Math.max(100,Math.min(w,h)*.24)){previous={...p};hushSand();return;}
  rubSand(distance);
- const nx=-dy/distance,ny=dx/distance,steps=Math.ceil(distance/1.4);
- for(let i=1;i<=steps;i++){
-  const q={x:previous.x+dx*i/steps,y:previous.y+dy*i/steps};furrow(q);
-  for(const side of [-1,1]){
-   const offset=8+Math.random()*7,gx=q.x+nx*offset*side,gy=q.y+ny*offset*side;
-   sg.fillStyle=Math.random()<.5?'#f2e9d7':'#bfb19a';sg.fillRect(gx,gy,.7+Math.random(),.7+Math.random());
-   if(i%3===0)grains.push({x:gx,y:gy,vx:nx*side*(12+Math.random()*35),vy:ny*side*(12+Math.random()*35)-12,life:0,ttl:.25+Math.random()*.3});
-  }
- }previous={...p};if(grains.length>700)grains.splice(0,grains.length-700);
+ displaceStroke(previous,p);
+ previous={...p};
 }
+
 c.addEventListener('pointerdown',e=>{if(inputMode.value!=='mouse'||e.button!==0)return;beginStroke(point(e));c.setPointerCapture(e.pointerId);});
 c.addEventListener('pointermove',e=>{if(inputMode.value!=='mouse'||!drawing)return;const samples=e.getCoalescedEvents?.()||[];for(const q of samples.length?samples:[e])drawSample(point(q));});
 function release(e){if(inputMode.value!=='mouse')return;endStroke();if(c.hasPointerCapture(e.pointerId))c.releasePointerCapture(e.pointerId);}
@@ -305,9 +357,8 @@ function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.s
 
 function frame(t){
  updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
- // The exposed bed is compact sand, lit less strongly than the loose top grains.
- g.drawImage(bed,0,0,w,h);
- g.drawImage(sand,0,0,w,h);drawPiles();
+ g.drawImage(photoBase,0,0,w,h);
+ drawRelief();
  for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#eee4d0';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
  const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(50,44,36,.13)');g.fillStyle=shade;g.fillRect(0,0,w,h);
  drawHandCursor();requestAnimationFrame(frame);
