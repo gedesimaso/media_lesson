@@ -185,19 +185,33 @@ function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294
 function fillSand(){
  const width=photoBase.width=Math.ceil(w);
  const height=photoBase.height=Math.ceil(h);
+ if(!width||!height)return;
+ let tone=null;
  if(photoReady){
-  const scale=Math.max(width/sandPhoto.naturalWidth,height/sandPhoto.naturalHeight);
-  const imageWidth=sandPhoto.naturalWidth*scale,imageHeight=sandPhoto.naturalHeight*scale;
-  photoContext.drawImage(sandPhoto,(width-imageWidth)/2,(height-imageHeight)/2,imageWidth,imageHeight);
-  return;
+  // Keep the broad tonal variation of the plate while dropping its macro grains.
+  const sample=document.createElement('canvas');
+  sample.width=Math.max(2,Math.ceil(width/24));
+  sample.height=Math.max(2,Math.ceil(height/24));
+  const ctx=sample.getContext('2d');
+  const scale=Math.max(sample.width/sandPhoto.naturalWidth,sample.height/sandPhoto.naturalHeight);
+  const iw=sandPhoto.naturalWidth*scale,ih=sandPhoto.naturalHeight*scale;
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(sandPhoto,(sample.width-iw)/2,(sample.height-ih)/2,iw,ih);
+  photoContext.drawImage(sample,0,0,width,height);
+  tone=photoContext.getImageData(0,0,width,height).data;
  }
  seed=12345;
  const image=photoContext.createImageData(width,height);
- for(let i=0;i<image.data.length;i+=4){
-  const noise=(random()-.5)*18;
-  image.data[i]=218+noise;
-  image.data[i+1]=209+noise;
-  image.data[i+2]=191+noise;
+ for(let y=0;y<height;y++)for(let x=0;x<width;x++){
+  const i=(y*width+x)*4;
+  const grains=(random()+random()-1)*8;
+  const wind=Math.sin(y*.19+x*.071+1.4*Math.sin(x*.012+y*.007))*1.6;
+  const daylight=5*(1-x/width)-6*y/height;
+  const variation=tone?(tone[i+1]-195)*.32:0;
+  const light=grains+wind+daylight+variation;
+  image.data[i]=203+light;
+  image.data[i+1]=179+light;
+  image.data[i+2]=144+light;
   image.data[i+3]=255;
  }
  photoContext.putImageData(image,0,0);
@@ -273,7 +287,7 @@ function emitStrokeGrains(x,y,nx,ny,moved){
   const along=(Math.random()-.5)*9;
   strokeGrains.push({x:x-ny*along+nx*side*start,y:y+nx*along+ny*side*start,
    dx:nx*side*(end-start),dy:ny*side*(end-start),age:0,duration:.12+Math.random()*.13,
-   size:.45+Math.random()*.85,tone:Math.random()<.5?'#f6eedc':'#9b876c'});
+   size:.35+Math.random()*.55,tone:Math.random()<.5?'#e3cda9':'#9e825d'});
  }
  if(strokeGrains.length>360)strokeGrains.splice(0,strokeGrains.length-360);
 }
@@ -283,7 +297,7 @@ function drawStrokeGrains(dt){
   if(grain.age>=grain.duration)return false;
   const progress=grain.age/grain.duration;
   const travel=1-(1-progress)**2;
-  g.globalAlpha=.85*Math.min(1,(1-progress)*4);
+  g.globalAlpha=.62*Math.min(1,(1-progress)*4);
   g.fillStyle=grain.tone;
   g.fillRect(grain.x+grain.dx*travel,grain.y+grain.dy*travel,grain.size,grain.size);
   return true;
@@ -389,7 +403,7 @@ function frame(t){
  g.drawImage(photoBase,0,0,w,h);
  drawRelief();
  drawStrokeGrains(dt);
- for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#eee4d0';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
+ for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#e2caa4';g.fillRect(grain.x,grain.y,.85,.85);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
  const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(50,44,36,.13)');g.fillStyle=shade;g.fillRect(0,0,w,h);
  drawHandCursor();requestAnimationFrame(frame);
 }requestAnimationFrame(frame);
