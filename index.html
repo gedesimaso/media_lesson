@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>빛으로 흩어지는 초상</title>
+<title>빛으로 흩어지는 얼굴</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:#e6f2ff;font:15px system-ui,sans-serif}
@@ -17,13 +17,13 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
 </head>
 <body>
 <header>
- <h1>빛으로 흩어지는 초상</h1>
+ <h1>빛으로 흩어지는 얼굴</h1>
  <button id="start">웹캠 켜기</button>
  <button id="stop" disabled>끄기</button>
  <button id="reset" disabled>빛 점 복원</button>
  <p id="status" role="status">웹캠을 켜고 화면의 빛 점에 검지를 가져가세요.</p>
 </header>
-<canvas id="scene" aria-label="검지로 건드리면 위로 흩어지는 얼굴, 머리카락과 목의 빛 점"></canvas>
+<canvas id="scene" aria-label="검지로 건드리면 향 연기처럼 피어오르는 얼굴 점"></canvas>
 <video id="camera" autoplay muted playsinline hidden></video>
 <script type="module">
 const canvas=document.getElementById('scene'),ctx=canvas.getContext('2d',{alpha:false});
@@ -34,7 +34,6 @@ const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
 let face=[],finger=null,previousFinger=null,mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
-let silhouette=[],lastMask=-Infinity;
 const sprites=['#527ff1','#79c6ff','#ceeeff'].map(color=>{
  const sprite=document.createElement('canvas');
  sprite.width=sprite.height=64;
@@ -53,14 +52,14 @@ function resize(){
  canvas.height=Math.max(1,Math.round(frameHeight*scale));
  ctx.setTransform(scale,0,0,scale,0,0);
  // Old screen coordinates are invalid after orientation or viewport changes.
- face=[];silhouette=[];lastMask=-Infinity;finger=previousFinger=null;smoke=[];
+ face=[];finger=previousFinger=null;smoke=[];
 }
 new ResizeObserver(resize).observe(canvas);resize();
 
 async function loadModels(){
  if(models)return models;
  if(!loading)loading=(async()=>{
-  const {FilesetResolver,FaceLandmarker,HandLandmarker,ImageSegmenter}=await import(visionUrl+'/vision_bundle.mjs');
+  const {FilesetResolver,FaceLandmarker,HandLandmarker}=await import(visionUrl+'/vision_bundle.mjs');
   const files=await FilesetResolver.forVisionTasks(visionUrl+'/wasm');
   const faceModel=await FaceLandmarker.createFromOptions(files,{
    baseOptions:{modelAssetPath:modelUrl+'/face_landmarker/face_landmarker/float16/1/face_landmarker.task'},
@@ -71,11 +70,7 @@ async function loadModels(){
     baseOptions:{modelAssetPath:modelUrl+'/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
     runningMode:'VIDEO',numHands:1
    });
-   const segmenter=await ImageSegmenter.createFromOptions(files,{
-    baseOptions:{modelAssetPath:modelUrl+'/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite'},
-    runningMode:'VIDEO',outputCategoryMask:true,outputConfidenceMasks:false
-   }).catch(error=>{console.warn('Hair and neck segmentation unavailable',error);return null;});
-   return models={face:faceModel,hand:handModel,segmenter};
+   return models={face:faceModel,hand:handModel};
   }catch(error){faceModel.close();throw error;}
  })().finally(()=>{loading=null;});
  return loading;
@@ -104,7 +99,7 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];silhouette=[];lastMask=-Infinity;finger=previousFinger=null;mouseDown=false;smoke=[];nextHit=0;erased.clear();
+ face=[];finger=previousFinger=null;mouseDown=false;smoke=[];nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;reset.disabled=true;
 }
 stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 화면의 빛 점에 검지를 가져가세요.';};
@@ -113,47 +108,6 @@ reset.onclick=()=>{erased.clear();smoke=[];previousFinger=null;nextHit=performan
 
 function project(point,transform){
  return {x:transform.x+(1-point.x)*transform.width,y:transform.y+point.y*transform.height};
-}
-const cloudColumns=37,cloudRows=59;
-function sampleSilhouette(mask,anchor){
- const pixels=mask.getAsUint8Array(),points=[];
- for(let row=0;row<cloudRows;row++){
-  const yRatio=-.78+row*.045;
-  const y=anchor.y+yRatio*anchor.height;
-  if(y<0||y>=1)continue;
-  for(let col=0;col<cloudColumns;col++){
-   const xRatio=(col-(cloudColumns-1)/2)*.058+(row%2)*.029;
-   const x=anchor.x+xRatio*anchor.width;
-   if(x<0||x>=1)continue;
-   const category=pixels[Math.floor(y*mask.height)*mask.width+Math.floor(x*mask.width)];
-   // The face mesh already covers face skin. Crop body skin to the neck below the chin.
-   const hair=category===1&&yRatio<=1.58;
-   const neck=category===2&&yRatio>=.94&&yRatio<=1.57&&Math.abs(xRatio)<.47;
-   if(hair||neck)points.push({id:1000+row*cloudColumns+col,xRatio,yRatio,hair});
-  }
- }
- return points;
-}
-function appendSilhouette(t,landmarks,transform){
- if(!landmarks){silhouette=[];lastMask=-Infinity;return;}
- if(!models.segmenter)return;
- const left=landmarks[234],right=landmarks[454],top=landmarks[10],chin=landmarks[152];
- const anchor={x:(left.x+right.x)/2,y:top.y,width:Math.max(.025,Math.abs(right.x-left.x)),height:Math.max(.025,chin.y-top.y)};
- if(t-lastMask>=130){
-  lastMask=t;
-  try{
-   models.segmenter.segmentForVideo(video,t,({categoryMask})=>{
-    silhouette=categoryMask?sampleSilhouette(categoryMask,anchor):[];
-   });
-  }catch(error){
-   console.warn('Hair and neck segmentation stopped',error);
-   models.segmenter.close();models.segmenter=null;silhouette=[];
-  }
- }
- for(const dot of silhouette){
-  const point=project({x:anchor.x+dot.xRatio*anchor.width,y:anchor.y+dot.yRatio*anchor.height},transform);
-  face.push({...point,id:dot.id,depth:0,silhouette:true,hair:dot.hair});
- }
 }
 function track(t){
  if(!models||!stream||video.readyState<2||t-lastInference<45||video.currentTime===lastVideoTime)return;
@@ -171,9 +125,8 @@ function track(t){
            y:old?old.y+(projected.y-old.y)*.55:projected.y,
            depth:point.z};
   }):[];
-  appendSilhouette(t,landmarks,transform);
   reset.disabled=!landmarks;
-  status.textContent=landmarks?(models.segmenter?'검지나 화면 터치로 빛 점을 건드려 보세요.':'머리카락과 목 추적을 불러오지 못했어요. 얼굴 점은 사용할 수 있어요.'):'카메라 가운데에 얼굴을 보여주세요.';
+  status.textContent=landmarks?'검지나 화면 터치로 빛 점을 건드려 보세요.':'카메라 가운데에 얼굴을 보여주세요.';
   if(!hand){finger=previousFinger=null;return;}
   const tip=project(hand[8],transform);
   previousFinger=finger;finger=tip;
@@ -201,36 +154,50 @@ function touchPoint(point,previous,t){
  }
  if(closest<0)return false;
  erased.add(face[closest].id??closest);nextHit=t+100;
- releaseSmoke(face[closest],dx,dy);
+ releaseSmoke(face[closest],dx);
  return true;
 }
-function releaseSmoke(point,dx,dy){
- const rise=Math.max(24,point.y+55);
- const duration=Math.min(5,Math.max(2.1,rise/185+1.25));
- const drift=Math.max(-55,Math.min(55,dx*1.9));
- for(let i=0;i<24;i++){
-  smoke.push({x:point.x,y:point.y,age:0,delay:i*.024,
-   duration:duration*(.87+Math.random()*.26),rise:rise+Math.random()*45,
-   drift:drift+(Math.random()-.5)*112,phase:Math.random()*Math.PI*2,
-   curl:9+Math.random()*25,size:2+Math.random()*9,tone:i%3});
+function releaseSmoke(point,dx){
+ const rise=Math.max(80,point.y+85);
+ const drift=Math.max(-24,Math.min(24,dx));
+ for(let strand=0;strand<3;strand++){
+  smoke.push({x:point.x,y:point.y,age:0,delay:strand*.12,
+   duration:Math.max(2.8,rise/128+1.35)*(1+strand*.065),rise,
+   drift:drift+(strand-1)*17,phase:Math.random()*Math.PI*2,
+   strength:strand===0?1:.48,width:strand===0?1.1:.7});
  }
- if(smoke.length>550)smoke.splice(0,smoke.length-550);
+ if(smoke.length>96)smoke.splice(0,smoke.length-96);
+}
+function smokePoint(strand,t){
+ const curl=Math.sin(strand.phase+t*9)*19+Math.sin(strand.phase*.5+t*18)*6;
+ return {x:strand.x+strand.drift*t+curl*Math.min(1,t*2.8),
+         y:strand.y-strand.rise*(.67*t+.33*t*t)};
 }
 function drawSmoke(dt){
- smoke=smoke.filter(particle=>{
-  particle.age+=dt;
-  const t=(particle.age-particle.delay)/particle.duration;
-  if(t>=1)return false;
-  if(t<0)return true;
-  // Draw several dim positions behind the rising particle to leave a light trace.
-  for(let echo=3;echo>=0;echo--){
-   const u=Math.max(0,t-echo*.026);
-   const x=particle.x+particle.drift*u+Math.sin(particle.phase+u*11)*particle.curl*Math.sin(u*Math.PI*.75);
-   const y=particle.y-particle.rise*(u*.48+u*u*.52);
-   const size=particle.size*(.44+u*2.5);
-   ctx.globalAlpha=(1-u)**1.6*(echo===0?.29:.065)*Math.min(1,.28+u*9);
-   ctx.drawImage(sprites[particle.tone],x-size,y-size*1.35,size*2,size*2.7);
+ smoke=smoke.filter(strand=>{
+  strand.age+=dt;
+  const front=(strand.age-strand.delay)/strand.duration;
+  const back=front-.58;
+  if(back>=1)return false;
+  if(front<=0)return true;
+  const start=Math.max(0,back),end=Math.min(1,front);
+  const tail=smokePoint(strand,start),tip=smokePoint(strand,end);
+  const gradient=ctx.createLinearGradient(tail.x,tail.y,tip.x,tip.y);
+  const fade=Math.min(1,front*9)*(1-Math.min(.8,Math.max(0,back)*.68))*strand.strength;
+  gradient.addColorStop(0,'rgba(119,147,185,0)');
+  gradient.addColorStop(.32,'rgba(146,174,211,'+(.46*fade)+')');
+  gradient.addColorStop(.73,'rgba(176,199,226,'+(.29*fade)+')');
+  gradient.addColorStop(1,'rgba(161,185,219,0)');
+  ctx.beginPath();ctx.moveTo(tail.x,tail.y);
+  for(let step=1;step<=28;step++){
+   const point=smokePoint(strand,start+(end-start)*step/28);
+   ctx.lineTo(point.x,point.y);
   }
+  ctx.strokeStyle=gradient;
+  ctx.lineCap='round';ctx.lineJoin='round';
+  ctx.globalAlpha=.13;ctx.lineWidth=strand.width*15;ctx.stroke();
+  ctx.globalAlpha=.27;ctx.lineWidth=strand.width*6;ctx.stroke();
+  ctx.globalAlpha=.7;ctx.lineWidth=strand.width*1.9;ctx.stroke();
   return true;
  });
 }
@@ -255,10 +222,10 @@ function render(t){
  for(let id=0;id<face.length;id++){
   const point=face[id];
   if(erased.has(point.id??id))continue;
-  const size=point.silhouette?2.6:Math.max(2.4,Math.min(6,3.9-point.depth*22));
-  ctx.globalAlpha=point.hair?.46:point.silhouette?.55:.68;
+  const size=Math.max(2.4,Math.min(6,3.9-point.depth*22));
+  ctx.globalAlpha=.68;
   ctx.drawImage(sprites[1],point.x-size,point.y-size,size*2,size*2);
-  ctx.globalAlpha=point.silhouette?.48:.84;
+  ctx.globalAlpha=.84;
   ctx.fillStyle='#d3ebff';ctx.fillRect(point.x-.55,point.y-.55,1.1,1.1);
  }
  drawSmoke(dt);
