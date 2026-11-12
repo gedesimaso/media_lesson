@@ -21,9 +21,9 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
  <button id="start">웹캠 켜기</button>
  <button id="stop" disabled>끄기</button>
  <button id="reset" disabled>빛 점 복원</button>
- <p id="status" role="status">웹캠을 켜고 화면의 빛 점에 검지를 가져가세요.</p>
+ <p id="status" role="status">웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.</p>
 </header>
-<canvas id="scene" aria-label="검지로 건드리면 향 연기처럼 피어오르는 얼굴 점"></canvas>
+<canvas id="scene" aria-label="손으로 스치면 향 연기처럼 피어오르는 얼굴 점과 손의 관절 점"></canvas>
 <video id="camera" autoplay muted playsinline hidden></video>
 <script type="module">
 const canvas=document.getElementById('scene'),ctx=canvas.getContext('2d',{alpha:false});
@@ -32,7 +32,7 @@ const start=document.getElementById('start'),stop=document.getElementById('stop'
 const visionUrl='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18';
 const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
-let face=[],finger=null,previousFinger=null,mouseDown=false,smoke=[],nextHit=0;
+let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
 const sprites=['#527ff1','#79c6ff','#ceeeff'].map(color=>{
  const sprite=document.createElement('canvas');
@@ -52,7 +52,7 @@ function resize(){
  canvas.height=Math.max(1,Math.round(frameHeight*scale));
  ctx.setTransform(scale,0,0,scale,0,0);
  // Old screen coordinates are invalid after orientation or viewport changes.
- face=[];finger=previousFinger=null;smoke=[];
+ face=[];handCloud=[];smoke=[];
 }
 new ResizeObserver(resize).observe(canvas);resize();
 
@@ -88,7 +88,7 @@ start.onclick=async()=>{
   await loadModels();
   if(attempt!==session)return;
   lastVideoTime=-1;lastInference=0;
-  status.textContent='카메라를 바라보고 검지를 얼굴 점에 가져가세요.';
+  status.textContent='카메라에 얼굴과 손을 보여주세요.';
  }catch(error){
   if(attempt!==session)return;
   endCamera();
@@ -99,12 +99,12 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];finger=previousFinger=null;mouseDown=false;smoke=[];nextHit=0;erased.clear();
+ face=[];handCloud=[];mouseDown=false;smoke=[];nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;reset.disabled=true;
 }
-stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 화면의 빛 점에 검지를 가져가세요.';};
+stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.';};
 window.addEventListener('pagehide',endCamera);
-reset.onclick=()=>{erased.clear();smoke=[];previousFinger=null;nextHit=performance.now()+280;};
+reset.onclick=()=>{erased.clear();smoke=[];nextHit=performance.now()+280;};
 
 function project(point,transform){
  return {x:transform.x+(1-point.x)*transform.width,y:transform.y+point.y*transform.height};
@@ -126,35 +126,48 @@ function track(t){
            depth:point.z};
   }):[];
   reset.disabled=!landmarks;
-  status.textContent=landmarks?'검지나 화면 터치로 빛 점을 건드려 보세요.':'카메라 가운데에 얼굴을 보여주세요.';
-  if(!hand){finger=previousFinger=null;return;}
-  const tip=project(hand[8],transform);
-  previousFinger=finger;finger=tip;
-  if(!mouseDown)touchPoint(tip,previousFinger,t);
+  const previousHand=handCloud;
+  handCloud=hand?hand.map(point=>project(point,transform)):[];
+  status.textContent=!landmarks?'카메라 가운데에 얼굴을 보여주세요.':handCloud.length?'손 인식 중 · 얼굴 점 위로 손을 움직여 보세요.':'손 인식 대기 · 손 전체를 카메라에 보여주세요.';
+  if(!mouseDown&&handCloud.length&&previousHand.length)brushHand(handCloud,previousHand,t);
  }catch(error){
   endCamera();
   status.textContent='추적이 멈췄어요. 웹캠을 다시 켜주세요.';
   console.error(error);
  }
 }
+function brushHand(points,previous,t){
+ const paths=[];
+ for(let i=0;i<points.length;i++){
+  const point=points[i],prior=previous[i];
+  if(!prior)continue;
+  const dx=point.x-prior.x,dy=point.y-prior.y,length=dx*dx+dy*dy;
+  if(length<2.5**2||length>130**2)continue;
+  paths.push({point,prior,dx,dy,length});
+ }
+ return touchPaths(paths,t,9);
+}
 function touchPoint(point,previous,t){
- if(t<nextHit||!face.length)return false;
  const dx=previous?point.x-previous.x:0,dy=previous?point.y-previous.y:0;
  const length=dx*dx+dy*dy;
- // Avoid hits along a sudden tracking jump.
- const bridge=length>0&&length<55*55;
- let closest=-1,best=8*8;
+ return touchPaths([{point,prior:previous,dx,dy,length:length<55**2?length:0}],t,8);
+}
+function touchPaths(paths,t,radius){
+ if(t<nextHit||!face.length||!paths.length)return false;
+ let closest=-1,best=radius*radius,drift=0;
  for(let id=0;id<face.length;id++){
+  if(erased.has(id))continue;
   const dot=face[id];
-  if(erased.has(dot.id??id))continue;
-  const u=bridge?Math.max(0,Math.min(1,((dot.x-previous.x)*dx+(dot.y-previous.y)*dy)/length)):1;
-  const x=bridge?previous.x+dx*u:point.x,y=bridge?previous.y+dy*u:point.y;
-  const distance=(dot.x-x)**2+(dot.y-y)**2;
-  if(distance<best){best=distance;closest=id;}
+  for(const {point,prior,dx,dy,length} of paths){
+   const u=length?Math.max(0,Math.min(1,((dot.x-prior.x)*dx+(dot.y-prior.y)*dy)/length)):1;
+   const x=length?prior.x+dx*u:point.x,y=length?prior.y+dy*u:point.y;
+   const distance=(dot.x-x)**2+(dot.y-y)**2;
+   if(distance<best){best=distance;closest=id;drift=dx;}
+  }
  }
  if(closest<0)return false;
- erased.add(face[closest].id??closest);nextHit=t+100;
- releaseSmoke(face[closest],dx);
+ erased.add(closest);nextHit=t+36;
+ releaseSmoke(face[closest],drift);
  return true;
 }
 function releaseSmoke(point,dx){
@@ -221,7 +234,7 @@ function render(t){
  ctx.globalCompositeOperation='lighter';
  for(let id=0;id<face.length;id++){
   const point=face[id];
-  if(erased.has(point.id??id))continue;
+  if(erased.has(id))continue;
   const size=Math.max(2.4,Math.min(6,3.9-point.depth*22));
   ctx.globalAlpha=.68;
   ctx.drawImage(sprites[1],point.x-size,point.y-size,size*2,size*2);
@@ -230,10 +243,15 @@ function render(t){
  }
  drawSmoke(dt);
  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
- if(finger){
-  ctx.strokeStyle='#a2dbff9c';ctx.lineWidth=1;
-  ctx.beginPath();ctx.arc(finger.x,finger.y,7,0,Math.PI*2);ctx.stroke();
+ for(let i=0;i<handCloud.length;i++){
+  const point=handCloud[i],tip=i>0&&i%4===0;
+  const radius=tip?6:4;
+  ctx.globalAlpha=tip?.95:.76;
+  ctx.drawImage(sprites[2],point.x-radius,point.y-radius,radius*2,radius*2);
+  ctx.fillStyle='#a8f3e6';
+  ctx.fillRect(point.x-1.25,point.y-1.25,2.5,2.5);
  }
+ ctx.globalAlpha=1;
  requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
