@@ -34,9 +34,12 @@ const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
 let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
+const faceLight=[151,205,246];
+const faceColor='#'+faceLight.map(channel=>channel.toString(16).padStart(2,'0')).join('');
+let dissolving=[];
 const smokeCanvas=document.createElement('canvas'),smokeContext=smokeCanvas.getContext('2d');
 let smokeGrid,smokeScratch,smokeImage,flowTime=0,smokeAlive=false,smokeUntil=0;
-const sprites=['#527ff1','#79c6ff','#ceeeff'].map(color=>{
+const sprites=['#527ff1',faceColor,'#ceeeff'].map(color=>{
  const sprite=document.createElement('canvas');
  sprite.width=sprite.height=64;
  const paint=sprite.getContext('2d');
@@ -182,10 +185,46 @@ function sizeSmoke(){
  clearSmoke();
 }
 function clearSmoke(){
- smoke=[];smokeAlive=false;smokeUntil=0;
+ smoke=[];dissolving=[];smokeAlive=false;smokeUntil=0;
  smokeGrid?.fill(0);smokeScratch?.fill(0);
 }
 function releaseSmoke(point,dx){
+ const direction=Math.max(-24,Math.min(24,dx*1.1));
+ const grains=Array.from({length:10},(_,i)=>{
+  const angle=(i+Math.random()*.7)*Math.PI/5;
+  const speed=15+Math.random()*33;
+  return {x:point.x,y:point.y,vx:Math.cos(angle)*speed+direction,vy:Math.sin(angle)*speed-18,
+   size:.65+Math.random()*.9};
+ });
+ dissolving.push({grains,age:0,direction});
+ if(dissolving.length>36)dissolving.shift();
+}
+function drawDissolving(dt){
+ const drag=Math.exp(-dt*4);
+ dissolving=dissolving.filter(burst=>{
+  const previousAge=burst.age;
+  burst.age+=dt;
+  for(const grain of burst.grains){
+   grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;
+   grain.vx*=drag;grain.vy=grain.vy*drag-dt*43;
+  }
+  if(previousAge<.20&&burst.age>=.20){
+   const centroid=burst.grains.reduce((sum,grain)=>({x:sum.x+grain.x,y:sum.y+grain.y}),{x:0,y:0});
+   startPlume({x:centroid.x/burst.grains.length,y:centroid.y/burst.grains.length},burst.direction);
+  }
+  if(burst.age>=.43)return false;
+  ctx.globalAlpha=.92*(1-Math.max(0,(burst.age-.10)/.33));
+  ctx.fillStyle=faceColor;
+  for(const grain of burst.grains){
+   const glow=grain.size*2.6;
+   ctx.drawImage(sprites[1],grain.x-glow,grain.y-glow,glow*2,glow*2);
+   ctx.fillRect(grain.x-grain.size*.5,grain.y-grain.size*.5,grain.size,grain.size);
+  }
+  return true;
+ });
+ ctx.globalAlpha=1;
+}
+function startPlume(point,dx){
  const x=point.x/frameWidth*smokeCanvas.width,y=point.y/frameHeight*smokeCanvas.height;
  const nearby=smoke.find(source=>source.remaining>.08&&Math.hypot(source.x-x,source.y-y)<5);
  if(nearby){
@@ -239,7 +278,7 @@ function drawSmoke(dt){
  const pixels=smokeImage.data;
  for(let i=0;i<smokeGrid.length;i++){
   const strength=Math.max(0,smokeGrid[i]-.006);
-  pixels[i*4]=191;pixels[i*4+1]=196;pixels[i*4+2]=205;
+  pixels[i*4]=faceLight[0];pixels[i*4+1]=faceLight[1];pixels[i*4+2]=faceLight[2];
   pixels[i*4+3]=Math.min(112,strength*190);
  }
  smokeContext.putImageData(smokeImage,0,0);
@@ -272,8 +311,9 @@ function render(t){
   ctx.globalAlpha=.68;
   ctx.drawImage(sprites[1],point.x-size,point.y-size,size*2,size*2);
   ctx.globalAlpha=.84;
-  ctx.fillStyle='#d3ebff';ctx.fillRect(point.x-.55,point.y-.55,1.1,1.1);
+  ctx.fillStyle=faceColor;ctx.fillRect(point.x-.55,point.y-.55,1.1,1.1);
  }
+ drawDissolving(dt);
  drawSmoke(dt);
  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
  for(let i=0;i<handCloud.length;i++){
