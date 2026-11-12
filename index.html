@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>빛으로 흩어지는 얼굴</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=LXGW+WenKai+KR&family=LXGW+WenKai+TC&family=Ma+Shan+Zheng&display=swap">
 <style>
 *{box-sizing:border-box}
 body{margin:0;background:#000;color:#e6f2ff;font:15px system-ui,sans-serif}
@@ -13,6 +14,17 @@ button{pointer-events:auto;background:#10151c;color:inherit;border:1px solid #44
 button:disabled{opacity:.4;cursor:default}
 #status{flex-basis:100%;margin:1px 0;color:#b2bfd1}
 canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
+#closing{position:fixed;inset:0;z-index:0;display:grid;place-items:center;padding:clamp(24px,7vw,90px);pointer-events:none}
+#closing[hidden]{display:none}
+#closing > *{grid-area:1/1}
+.verse{text-align:center;display:grid;gap:.15em;font:normal clamp(2.8rem,9vw,7.8rem)/1.2 "Ma Shan Zheng","LXGW WenKai TC","Gungsuh","궁서",serif;color:#b5d6ee;letter-spacing:.08em}
+.verse[hidden]{display:none}
+.verse-row{display:flex;justify-content:center}
+.verse span{display:inline-block;opacity:0;text-shadow:0 0 .18em #7ca6ce7a}
+.verse span:nth-child(2){font-family:"LXGW WenKai TC","Gungsuh","궁서",serif}
+#reflection{width:min(100%,39rem);margin:0;line-height:1.95;color:#e8e7e4;font-family:"궁서",Gungsuh,"GungSeo","궁서체",GungsuhChe,"LXGW WenKai KR",serif;font-size:clamp(1.12rem,3.4vw,1.72rem);text-align:left;word-break:keep-all;opacity:0;transition:opacity 1.45s ease}
+#reflection.visible{opacity:1}
+@media (prefers-reduced-motion:reduce){#reflection{transition:none}}
 </style>
 </head>
 <body>
@@ -23,6 +35,13 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
  <button id="reset" disabled>빛 점 복원</button>
  <p id="status" role="status">웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.</p>
 </header>
+<div id="closing" hidden>
+ <div id="verse" class="verse" lang="zh-Hant" aria-label="色卽是空, 空卽是色">
+  <div class="verse-row"><span>色</span><span>卽</span><span>是</span><span>空</span></div>
+  <div class="verse-row"><span>空</span><span>卽</span><span>是</span><span>色</span></div>
+ </div>
+ <p id="reflection" aria-live="polite" hidden>눈앞에 드러난 모습은 그 자체로 고정된 것이 아니며, 비어 있음은 아무것도 없다는 뜻이 아니다. 수많은 조건이 만나 잠시 모습을 이루고, 그 모습은 다시 조건에 따라 변한다. 그러니 있는 그대로 보되, 그것을 영원한 실체라고 붙들지는 말라.</p>
+</div>
 <canvas id="scene" aria-label="손으로 스치면 향 연기처럼 피어오르는 얼굴 점과 손의 관절 점"></canvas>
 <video id="camera" autoplay muted playsinline hidden></video>
 <script type="module">
@@ -34,6 +53,16 @@ const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
 let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
+const closing=document.getElementById('closing'),verse=document.getElementById('verse');
+const reflection=document.getElementById('reflection');
+const glyphs=[...verse.querySelectorAll('span')];
+const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const clamp01=value=>Math.max(0,Math.min(1,value));
+function hideClosing(){
+ closing.hidden=true;verse.hidden=false;reflection.hidden=true;
+ reflection.classList.remove('visible');
+ for(const glyph of glyphs){glyph.style.opacity='0';glyph.style.clipPath='';glyph.style.filter='';glyph.style.transform='';}
+}
 const faceOval=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
 const portrait=document.createElement('canvas'),portraitPaint=portrait.getContext('2d');
 let cameraTransform=null,finale=null;
@@ -62,7 +91,7 @@ function resize(){
  canvas.height=Math.max(1,Math.round(frameHeight*scale));
  ctx.setTransform(scale,0,0,scale,0,0);
  // Old screen coordinates are invalid after orientation or viewport changes.
- if(finale){finale=null;erased.clear();}
+ if(finale){finale=null;erased.clear();hideClosing();}
  face=[];handCloud=[];cameraTransform=null;sizeSmoke();
 }
 new ResizeObserver(resize).observe(canvas);resize();
@@ -110,12 +139,12 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;clearSmoke();nextHit=0;erased.clear();
+ face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;hideClosing();clearSmoke();nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;reset.disabled=true;
 }
 stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.';};
 window.addEventListener('pagehide',endCamera);
-reset.onclick=()=>{finale=null;erased.clear();clearSmoke();nextHit=performance.now()+280;};
+reset.onclick=()=>{finale=null;hideClosing();erased.clear();clearSmoke();nextHit=performance.now()+280;};
 
 function project(point,transform){
  return {x:transform.x+(1-point.x)*transform.width,y:transform.y+point.y*transform.height};
@@ -260,8 +289,39 @@ function updateFinale(dt){
   }
  }
  if(finale.phase==='burst'&&((!footageEffects.length&&flows.every(flow=>flow.last===-Infinity))||finale.age>5.2)){
-  clearSmoke();finale.phase='done';finale.age=0;
-  status.textContent='빛 점 복원을 누르면 다시 시작할 수 있어요.';
+  clearSmoke();finale.phase='verse';finale.age=0;
+  closing.hidden=false;
+ }
+ if(finale.phase==='verse')updateVerse();
+ if(finale.phase==='verseSmoke'&&((!footageEffects.length&&flows.every(flow=>flow.last===-Infinity))||finale.age>5.2)){
+  clearSmoke();finale.phase='reflection';finale.age=0;
+  reflection.hidden=false;
+  requestAnimationFrame(()=>{if(finale?.phase==='reflection')reflection.classList.add('visible');});
+ }
+}
+function updateVerse(){
+ const age=finale.age;
+ const writingEnd=reducedMotion?0:3.1;
+ const releaseAt=writingEnd+2.1;
+ for(let i=0;i<glyphs.length;i++){
+  const glyph=glyphs[i];
+  const written=reducedMotion?1:clamp01((age-i*.36)/.58);
+  const fading=clamp01((age-releaseAt-i*.11)/.78);
+  glyph.style.opacity=String(Math.min(1,written*2.5)*(1-fading));
+  glyph.style.clipPath=written>=1?'none':'inset(0 '+(1-written)*100+'% 0 0)';
+  glyph.style.filter='blur('+((1-written)*3+fading*8)+'px)';
+  glyph.style.transform='translateY('+(-fading*16)+'px)';
+  const previous=finale.releasedGlyphs??0;
+  if(age>=releaseAt+i*.11&&previous===i){
+   const rect=glyph.getBoundingClientRect(),stage=canvas.getBoundingClientRect();
+   const point={x:rect.left-stage.left+rect.width*.5,y:rect.top-stage.top+rect.height*.58};
+   if(footageReady)addFootage(point,i%2?18:-18,{x:i%2?.72:-.72,y:-.35,index:i});
+   else releaseSmoke(point,i%2?22:-22);
+   finale.releasedGlyphs=i+1;
+  }
+ }
+ if(age>=releaseAt+(glyphs.length-1)*.11+.8){
+  verse.hidden=true;finale.phase='verseSmoke';finale.age=0;
  }
 }
 function drawPortrait(){
