@@ -1,440 +1,218 @@
-<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>손끝의 모래 · 샌드아트</title>
-<style>*{box-sizing:border-box}body{margin:0;background:#29241d;color:#f4e4c6;font:15px system-ui}header{padding:20px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}h1{font-size:20px;margin:0}button,label{background:#493b2c;border:1px solid #806848;border-radius:8px;padding:10px;color:inherit}button{font:inherit;cursor:pointer}input{max-width:180px}main{position:relative}canvas{width:100%;height:65vh;min-height:380px;display:block;touch-action:none}p{margin:12px 20px;line-height:1.6}#preview{width:120px;height:145px;object-fit:cover;border:2px solid #a2edc7;border-radius:50%;background:#16372e}aside{display:flex;align-items:center;gap:12px;padding:12px 20px;flex-wrap:wrap}aside>div{flex:1;min-width:220px}aside label{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}#preview{flex-shrink:0;min-height:0;transform:none}small{display:block;color:#abd2c2}button:disabled{opacity:.5}select{font:inherit;max-width:100%}#handPreview{width:min(320px,100%);height:auto;min-height:0;background:#0b1e18}</style>
-<header><h1>손끝의 모래 · 샌드아트</h1><button id="start">웹캠 켜기</button><button id="stop" disabled>웹캠 끄기</button><button id="clearSand">모래 고르기</button><label>입력 <select id="inputMode"><option value="hand">손 인식</option><option value="mouse">마우스 테스트</option></select></label><span>검지만 펴기: 그리기 · 손끝 모으기: 모래 쓸기</span><select id="drawMode" hidden><option value="index">검지만 펴기</option></select><label><input id="showSkeleton" type="checkbox" checked> 손 스켈레톤 보기</label></header>
-<p id="status" role="status">검지만 펴면 그려지고, 다른 손 모양에서는 멈춥니다. 손끝을 모아 모래를 밀거나, 두 손을 모아 글씨를 덮고 더미를 쌓아보세요.</p><p id="handStatus" role="status">손 인식 대기 중</p>
-<main><canvas id="scene" aria-label="검지로 모래를 밀어 그림을 그리는 모래판"></canvas></main>
-<aside><canvas id="handPreview" width="320" height="180" aria-label="거울 방향 웹캠 영상과 손 스켈레톤"></canvas><video id="camera" autoplay muted playsinline hidden></video><canvas id="preview" width="240" height="290" aria-label="요정에 들어가는 확대된 얼굴 미리보기"></canvas><div><span id="tracking" role="status">웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.</span><br><label>얼굴 확대 <input id="faceZoom" type="range" min="0.8" max="3" step="0.05" value="1"><output id="zoomValue">1.00배</output></label><small>자동 인식 준비에는 인터넷 연결이 필요합니다.<br>웹캠 영상은 기기 안에서 처리하며 업로드·녹화하지 않습니다.</small></div></aside>
-<script>
-(()=>{'use strict';const c=document.getElementById('scene'),screenContext=c.getContext('2d'),v=document.getElementById('camera'),status=document.getElementById('status'),start=document.getElementById('start'),stop=document.getElementById('stop');let stream=null,w=900,h=500,drawing=false;const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-const g=screenContext;
-const preview=document.getElementById('preview'),pg=preview.getContext('2d'),tracking=document.getElementById('tracking'),faceZoom=document.getElementById('faceZoom');
-let detector=null,detectorLoading=null,faceBox=null,lastFaceSeen=-Infinity,lastDetect=-Infinity,lastVideoTime=-1,trackingFailed=false;
-faceZoom.oninput=()=>document.getElementById('zoomValue').value=Number(faceZoom.value).toFixed(2)+'배';
-async function prepareFaceDetector(){
- if(detector)return detector;
- if(detectorLoading)return detectorLoading;
- tracking.textContent='얼굴 자동 확대를 준비하고 있어요…';
- detectorLoading=(async()=>{
-  const {FaceDetector,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');
-  const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');
-  detector=await FaceDetector.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'},runningMode:'VIDEO',minDetectionConfidence:0.4});
-  trackingFailed=false;return detector;
- })().catch(e=>{trackingFailed=true;detectorLoading=null;if(stream)tracking.textContent='자동 인식을 불러오지 못했어요. 인터넷 연결을 확인하고 웹캠을 다시 켜주세요. 확대 슬라이더로 직접 조절할 수도 있어요.';return null;});
- return detectorLoading;
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>빛으로 흩어지는 얼굴</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#000;color:#e6f2ff;font:15px system-ui,sans-serif}
+header{position:fixed;z-index:1;inset:0 0 auto;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;padding:16px;background:linear-gradient(#000e,transparent);pointer-events:none}
+h1{font-size:16px;margin:0 8px 0 0;font-weight:600}
+button{pointer-events:auto;background:#10151c;color:inherit;border:1px solid #445369;border-radius:7px;padding:9px 13px;font:inherit;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+#status{flex-basis:100%;margin:1px 0;color:#b2bfd1}
+canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
+</style>
+</head>
+<body>
+<header>
+ <h1>빛으로 흩어지는 얼굴</h1>
+ <button id="start">웹캠 켜기</button>
+ <button id="stop" disabled>끄기</button>
+ <button id="reset" disabled>얼굴 복원</button>
+ <p id="status" role="status">웹캠을 켜고 화면의 빛 점에 검지를 가져가세요.</p>
+</header>
+<canvas id="scene" aria-label="검지로 건드리면 빛의 연기로 흩어지는 얼굴 점"></canvas>
+<video id="camera" autoplay muted playsinline hidden></video>
+<script type="module">
+const canvas=document.getElementById('scene'),ctx=canvas.getContext('2d',{alpha:false});
+const video=document.getElementById('camera'),status=document.getElementById('status');
+const start=document.getElementById('start'),stop=document.getElementById('stop'),reset=document.getElementById('reset');
+const visionUrl='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18';
+const modelUrl='https://storage.googleapis.com/mediapipe-models';
+let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
+let face=[],finger=null,previousFinger=null,mouseDown=false,smoke=[],nextHit=0;
+const erased=new Set();
+const sprites=['#527ff1','#79c6ff','#ceeeff'].map(color=>{
+ const sprite=document.createElement('canvas');
+ sprite.width=sprite.height=64;
+ const paint=sprite.getContext('2d');
+ const glow=paint.createRadialGradient(32,32,0,32,32,32);
+ glow.addColorStop(0,color);
+ glow.addColorStop(.3,color+'84');
+ glow.addColorStop(1,color+'00');
+ paint.fillStyle=glow;paint.fillRect(0,0,64,64);
+ return sprite;
+});
+function resize(){
+ const bounds=canvas.getBoundingClientRect(),scale=Math.min(devicePixelRatio||1,2);
+ frameWidth=bounds.width;frameHeight=bounds.height;
+ canvas.width=Math.max(1,Math.round(frameWidth*scale));
+ canvas.height=Math.max(1,Math.round(frameHeight*scale));
+ ctx.setTransform(scale,0,0,scale,0,0);
+ // Old screen coordinates are invalid after orientation or viewport changes.
+ face=[];finger=previousFinger=null;smoke=[];
 }
-function updateFace(t){
- if(!stream||v.readyState<2)return;
- if(detector&&!trackingFailed&&t-lastDetect>=100&&v.currentTime!==lastVideoTime){
-  lastDetect=t;lastVideoTime=v.currentTime;
-  try{
-   const faces=detector.detectForVideo(v,t).detections;
-   const selected=faces.reduce((best,item)=>!best||item.boundingBox.width*item.boundingBox.height>best.boundingBox.width*best.boundingBox.height?item:best,null);
-   if(selected){const b=selected.boundingBox,next={cx:b.originX+b.width/2,cy:b.originY+b.height/2,width:b.width,height:b.height};
-    if(!faceBox||t-lastFaceSeen>800)faceBox=next;
-    else for(const key of ['cx','cy','width','height'])faceBox[key]+=(next[key]-faceBox[key])*.4;
-    lastFaceSeen=t;tracking.textContent='얼굴 인식 중 · 거리에 맞춰 자동으로 확대하고 있어요.';
-   }else if(t-lastFaceSeen>800){faceBox=null;tracking.textContent='얼굴을 찾고 있어요. 카메라를 바라봐 주세요. 너무 멀거나 어두우면 가까이 와주세요.';}
-  }catch(e){trackingFailed=true;faceBox=null;tracking.textContent='자동 인식이 멈췄어요. 웹캠을 다시 켜주세요. 확대 슬라이더로 직접 조절할 수도 있어요.';}
- }
- if(faceBox&&t-lastFaceSeen>800)faceBox=null;
- const crop=faceCrop(v.videoWidth,v.videoHeight,faceBox,Number(faceZoom.value));
- pg.clearRect(0,0,preview.width,preview.height);pg.save();pg.translate(preview.width,0);pg.scale(-1,1);pg.drawImage(v,crop.x,crop.y,crop.width,crop.height,0,0,preview.width,preview.height);pg.restore();
-}
-function faceCrop(vw,vh,box,zoom){
- const ratio=46/58;
- let ch=box?Math.max(box.height*1.08,box.width*1.05/ratio):vh;
- ch=Math.min(vh,vw/ratio,ch/zoom);const cw=ch*ratio;
- const cx=box?box.cx:vw/2,cy=box?box.cy-box.height*.025:vh/2;
- return {x:Math.max(0,Math.min(vw-cw,cx-cw/2)),y:Math.max(0,Math.min(vh-ch,cy-ch/2)),width:cw,height:ch};
-}
+new ResizeObserver(resize).observe(canvas);resize();
 
-
-const inputMode=document.getElementById('inputMode'),drawMode=document.getElementById('drawMode'),showSkeleton=document.getElementById('showSkeleton'),handStatus=document.getElementById('handStatus'),handPreview=document.getElementById('handPreview'),hg=handPreview.getContext('2d');
-let handDetector=null,handLoading=null,handFailed=false,lastHandDetect=-Infinity,lastHandVideo=-1,handPoints=null,handPointer=null,pinching=false;
-const HAND_LINKS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
-let gestureCandidate="idle",gestureCount=0,handAction="idle",sweepPrevious=null;
-let previousPair=null,secondHand=null;
-function resetHand(){previousPair=null;secondHand=null;handAction="idle";gestureCandidate="idle";gestureCount=0;sweepPrevious=null;endStroke();handPoints=null;handPointer=null;pinching=false;lastHandVideo=-1;lastHandDetect=-Infinity;}
-inputMode.onchange=()=>{resetHand();status.textContent=inputMode.value==='hand'?'검지만 펴서 그리거나 손끝을 모아 모래를 쓸어보세요.':'마우스 버튼을 누른 채 모래를 그려보세요.';if(stream&&inputMode.value==='hand')void prepareHandDetector();};
-drawMode.onchange=resetHand;
-async function prepareHandDetector(){
- if(handDetector){handFailed=false;return handDetector;}
- if(handLoading)return handLoading;
- handStatus.textContent='손 인식 모델을 불러오고 있어요…';
- handLoading=(async()=>{const {HandLandmarker,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');handDetector=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},runningMode:'VIDEO',numHands:2,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});handFailed=false;if(stream)handStatus.textContent='준비됐어요. 카메라에 손바닥과 손가락을 보여주세요.';return handDetector;})().catch(e=>{handLoading=null;handFailed=true;if(stream)handStatus.textContent='손 인식을 불러오지 못했어요. 인터넷·카메라 권한을 확인하고 웹캠을 다시 켜주세요. 마우스 테스트도 선택할 수 있어요.';return null;});return handLoading;
-}
-function pixelDistance(a,b){return Math.hypot((a.x-b.x)*v.videoWidth,(a.y-b.y)*v.videoHeight);}
-function classifyHand(points){
- const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y,(a.z||0)-(b.z||0));
- const angle=(a,b,c)=>{const u=[a.x-b.x,a.y-b.y,(a.z||0)-(b.z||0)],v=[c.x-b.x,c.y-b.y,(c.z||0)-(b.z||0)];return Math.acos(Math.max(-1,Math.min(1,u.reduce((n,x,i)=>n+x*v[i],0)/(Math.hypot(...u)*Math.hypot(...v)||1))))*180/Math.PI;};
- const palm=Math.max(.025,dist(points[0],points[9]));
- const extended=(m,p,t)=>angle(points[m],points[p],points[t])>155&&dist(points[t],points[0])>dist(points[p],points[0])+palm*.18;
- const fingers=[[5,6,8],[9,10,12],[13,14,16],[17,18,20]].map(([m,p,t])=>extended(m,p,t));
- const tips=[4,8,12,16,20].map(i=>points[i]),center={x:tips.reduce((n,p)=>n+p.x,0)/5,y:tips.reduce((n,p)=>n+p.y,0)/5,z:tips.reduce((n,p)=>n+(p.z||0),0)/5};
- const gathered=Math.max(...tips.map(p=>dist(p,center)))<palm*.48&&dist(center,points[0])>palm*1.15;
- if(gathered)return {action:'sweep',point:center};
- const thumbOut=dist(points[4],points[5])>palm*.85;
- return {action:fingers[0]&&!fingers[1]&&!fingers[2]&&!fingers[3]&&!thumbOut?'draw':'idle',point:points[8]};
-}
-function processHands(hands){
- if(hands.length<2){
-  if(previousPair)resetHand();
-  processHand(hands[0]||null);
-  return;
- }
- if(!previousPair)resetHand();
- handPoints=hands[0];secondHand=hands[1];handPointer=null;
- const pair=hands.map(points=>{
-  // Follow the working edge between the knuckles and fingertips.
-  const edge=[5,9,13,17,8,12,16,20].map(i=>points[i]);
-  return {x:w*(1-edge.reduce((sum,p)=>sum+p.x,0)/edge.length),
-          y:h*edge.reduce((sum,p)=>sum+p.y,0)/edge.length};
- }).sort((a,b)=>a.x-b.x);
- if(previousPair){
-  const gap=Math.hypot(pair[1].x-pair[0].x,pair[1].y-pair[0].y);
-  const oldGap=Math.hypot(previousPair[1].x-previousPair[0].x,previousPair[1].y-previousPair[0].y);
-  // Accumulate slow movements before updating the last accepted hand positions.
-  if(Math.abs(oldGap-gap)<2.5)return;
-  if(oldGap>gap&&gap<Math.hypot(w,h)*.84){
-   const center={x:(pair[0].x+pair[1].x)/2,y:(pair[0].y+pair[1].y)/2};
-   for(let i=0;i<2;i++)sweepSand(previousPair[i],pair[i],center);
-  }
- }
- previousPair=pair;
- handStatus.textContent='두 손을 모아 쓸면 글씨가 덮이고 가운데 모래가 쌓여요.';
-}
-function processHand(points){
- if(inputMode.value!=='hand')return;
- if(!points){resetHand();handStatus.textContent='손을 찾고 있어요. 한 손 전체를 보여주세요.';return;}
- handPoints=points;const next=classifyHand(points);
- if(next.action!==handAction){endStroke();sweepPrevious=null;handAction='idle';}
- if(next.action===gestureCandidate)gestureCount++;else{gestureCandidate=next.action;gestureCount=1;}
- // Three agreeing samples start an action; one disagreeing sample stops it.
- if(gestureCount>=3)handAction=next.action;
- const raw={x:Math.max(0,Math.min(w,(1-next.point.x)*w)),y:Math.max(0,Math.min(h,next.point.y*h))};
- if(!handPointer||Math.hypot(raw.x-handPointer.x,raw.y-handPointer.y)>Math.min(w,h)*.25){handPointer=raw;endStroke();sweepPrevious=null;}
- else {const d=Math.hypot(raw.x-handPointer.x,raw.y-handPointer.y);if(d>2){const f=Math.min(.58,.22+d/100);handPointer={x:handPointer.x+(raw.x-handPointer.x)*f,y:handPointer.y+(raw.y-handPointer.y)*f};}}
- if(handAction==='draw'){sweepPrevious=null;if(!drawing)beginStroke(handPointer);else drawSample(handPointer);handStatus.textContent='검지로 그리는 중 · 다른 손가락을 펴면 멈춰요.';}
- else if(handAction==='sweep'){endStroke();if(sweepPrevious)sweepSand(sweepPrevious,handPointer);sweepPrevious={...handPointer};handStatus.textContent='모래 쓸기 · 모은 손끝으로 천천히 밀어보세요.';}
- else{endStroke();sweepPrevious=null;handStatus.textContent='검지만 펴기: 그리기 · 다섯 손끝 모으기: 쓸기';}
-}
-function updateHand(t){
- if(!stream||v.readyState<2||inputMode.value!=='hand')return;
- if(handDetector&&!handFailed&&t-lastHandDetect>=50&&v.currentTime!==lastHandVideo){lastHandDetect=t;lastHandVideo=v.currentTime;try{const result=handDetector.detectForVideo(v,t);processHands(result.landmarks);}catch(e){handFailed=true;resetHand();handStatus.textContent='손 인식이 멈췄어요. 웹캠을 껐다가 다시 켜주세요.';}}
-}
-function renderHandPreview(){
- hg.clearRect(0,0,handPreview.width,handPreview.height);
- if(!stream||v.readyState<2)return;
- hg.save();hg.translate(handPreview.width,0);hg.scale(-1,1);hg.drawImage(v,0,0,handPreview.width,handPreview.height);hg.restore();
- if(showSkeleton.checked&&handPoints)for(const previewPoints of [handPoints,...(secondHand?[secondHand]:[])]){hg.strokeStyle='#7df3b7';hg.lineWidth=2;for(const [a,b] of HAND_LINKS){hg.beginPath();hg.moveTo((1-previewPoints[a].x)*320,previewPoints[a].y*180);hg.lineTo((1-previewPoints[b].x)*320,previewPoints[b].y*180);hg.stroke();}for(let i=0;i<previewPoints.length;i++){const p=previewPoints[i];hg.fillStyle=i===8?'#ffce70':'#bcffe0';hg.beginPath();hg.arc((1-p.x)*320,p.y*180,i===8?5:2.5,0,Math.PI*2);hg.fill();}}
-}
-function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.save();g.strokeStyle=drawing?'#ffd18b':'#b4ead4';g.lineWidth=2;g.beginPath();g.arc(handPointer.x,handPointer.y,handAction==='sweep'?32:drawing?7:11,0,Math.PI*2);g.stroke();g.restore();}
-
-
-const photoBase=document.createElement('canvas'),photoContext=photoBase.getContext('2d'),sandPhoto=new Image();
-let photoReady=false;
-// ImageGen beach sand plate, with a neutral fallback while loading.
-sandPhoto.onload=()=>{photoReady=true;fillSand();};
-sandPhoto.onerror=()=>{photoReady=false;};
-sandPhoto.src='./white-beach-sand.jpg';
-let previous=null,grains=[],strokeGrains=[],lastFrame=0,seed=12345;
-
-// Locally synthesized dry sand friction: filtered, softly modulated noise.
-let sandAudio=null,lastRubTime=0;
-function unlockSandAudio(){
- try{
-  if(!sandAudio){
-   const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;
-   const context=new Audio(),source=context.createBufferSource();
-   const buffer=context.createBuffer(1,context.sampleRate*3,context.sampleRate),data=buffer.getChannelData(0);
-   let low=0,texture=0;
-   for(let i=0;i<data.length;i++){
-    const white=Math.random()*2-1;low=.96*low+.04*white;texture=.997*texture+.003*(Math.random()*2-1);
-    data[i]=(white*.52+low*2.8)*(.65+Math.min(.35,Math.abs(texture)*9));
-   }
-   source.buffer=buffer;source.loop=true;
-   const high=context.createBiquadFilter();high.type='highpass';high.frequency.value=450;
-   const lowpass=context.createBiquadFilter();lowpass.type='lowpass';lowpass.frequency.value=4200;lowpass.Q.value=.5;
-   const gain=context.createGain();gain.gain.value=0;
-   source.connect(high);high.connect(lowpass);lowpass.connect(gain);gain.connect(context.destination);source.start();
-   sandAudio={context,source,gain,lowpass};
-  }
-  if(sandAudio.context.state==='suspended')void sandAudio.context.resume().catch(()=>{});
- }catch{/* Drawing remains available when audio is unavailable. */}
-}
-document.addEventListener('pointerdown',unlockSandAudio,{capture:true});
-document.addEventListener('keydown',unlockSandAudio,{capture:true});
-function hushSand(){
- lastRubTime=0;if(!sandAudio)return;
- const now=sandAudio.context.currentTime,param=sandAudio.gain.gain;
- param.cancelScheduledValues(now);param.setTargetAtTime(0,now,.018);
-}
-function rubSand(distance){
- const stamp=performance.now(),elapsed=lastRubTime?Math.max(8,stamp-lastRubTime):35;lastRubTime=stamp;
- if(!sandAudio||sandAudio.context.state!=='running')return;
- const speed=Math.min(1,distance/elapsed/1.1),now=sandAudio.context.currentTime;
- const volume=.035+speed*.15,param=sandAudio.gain.gain;
- param.cancelScheduledValues(now);param.setTargetAtTime(volume,now,.012);
- // Movement renews the sound; holding still fades to silence automatically.
- param.setTargetAtTime(0,now+.065,.028);
- sandAudio.lowpass.frequency.setTargetAtTime(2200+speed*3300,now,.025);
- sandAudio.source.playbackRate.setTargetAtTime(.8+speed*.45,now,.025);
-}
-document.addEventListener('visibilitychange',()=>{if(document.hidden)resetHand();});
-
-function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;}
-function fillSand(){
- const density=Math.min(devicePixelRatio||1,2.5,Math.sqrt(3200000/Math.max(1,w*h)));
- const width=photoBase.width=Math.ceil(w*density);
- const height=photoBase.height=Math.ceil(h*density);
- if(!width||!height)return;
- let tone=null;
- if(photoReady){
-  // Keep the broad tonal variation of the plate while dropping its macro grains.
-  const sample=document.createElement('canvas');
-  sample.width=Math.max(2,Math.ceil(width/24));
-  sample.height=Math.max(2,Math.ceil(height/24));
-  const ctx=sample.getContext('2d');
-  const scale=Math.max(sample.width/sandPhoto.naturalWidth,sample.height/sandPhoto.naturalHeight);
-  const iw=sandPhoto.naturalWidth*scale,ih=sandPhoto.naturalHeight*scale;
-  ctx.imageSmoothingQuality='high';
-  ctx.drawImage(sandPhoto,(sample.width-iw)/2,(sample.height-ih)/2,iw,ih);
-  photoContext.drawImage(sample,0,0,width,height);
-  tone=photoContext.getImageData(0,0,width,height).data;
- }
- seed=12345;
- const image=photoContext.createImageData(width,height);
- for(let y=0;y<height;y++)for(let x=0;x<width;x++){
-  const i=(y*width+x)*4;
-  const grains=(random()+random()-1)*8;
-  const wind=Math.sin((y*.19+x*.071)/density+1.4*Math.sin((x*.012+y*.007)/density))*1.6;
-  const daylight=5*(1-x/width)-6*y/height;
-  const variation=tone?(tone[i+1]-195)*.32:0;
-  const light=grains+wind+daylight+variation;
-  image.data[i]=203+light;
-  image.data[i+1]=179+light;
-  image.data[i+2]=144+light;
-  image.data[i+3]=255;
- }
- photoContext.putImageData(image,0,0);
-}
-
-const reliefLayer=document.createElement('canvas'),reliefContext=reliefLayer.getContext('2d');
-const cell=2;
-let mass,massCols,massRows,reliefPixels,massDirty=true;
-function resetMass(cols=Math.ceil(w/cell),rows=Math.ceil(h/cell)){
- massCols=cols;massRows=rows;
- mass=new Float32Array(cols*rows).fill(1);
- reliefLayer.width=cols;reliefLayer.height=rows;
- reliefPixels=reliefContext.createImageData(cols,rows);
- massDirty=true;
-}
-function transferSand(cx,cy,radius,transport){
- const changes=new Map();
- let moved=0;
- function add(index,amount){changes.set(index,(changes.get(index)||0)+amount);}
- const reach=radius/cell;
- for(let y=Math.max(0,Math.ceil(cy-reach));y<=Math.min(massRows-1,Math.floor(cy+reach));y++){
-  for(let x=Math.max(0,Math.ceil(cx-reach));x<=Math.min(massCols-1,Math.floor(cx+reach));x++){
-   const distance=Math.hypot(x-cx,y-cy)/reach;
-   if(distance>=1)continue;
-   transport(x,y,distance,(toX,toY,fraction)=>{
-    const source=y*massCols+x;
-    const targetX=Math.max(0,Math.min(massCols-1,toX));
-    const targetY=Math.max(0,Math.min(massRows-1,toY));
-    const amount=mass[source]*fraction;
-    if(amount<=0)return;
-    moved+=amount;
-    const x0=Math.floor(targetX),y0=Math.floor(targetY);
-    const fx=targetX-x0,fy=targetY-y0;
-    add(source,-amount);
-    add(y0*massCols+x0,amount*(1-fx)*(1-fy));
-    if(fx)add(y0*massCols+x0+1,amount*fx*(1-fy));
-    if(fy)add((y0+1)*massCols+x0,amount*(1-fx)*fy);
-    if(fx&&fy)add((y0+1)*massCols+x0+1,amount*fx*fy);
-   });
-  }
- }
- for(const [index,amount] of changes)mass[index]+=amount;
- massDirty=true;
- return moved;
-}
-function displaceStroke(from,to){
- const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
- if(distance===0)return;
- const nx=-dy/distance,ny=dx/distance;
- const steps=Math.ceil(distance/2.5);
- const strength=1-Math.exp(-distance/steps*.24);
- for(let step=1;step<=steps;step++){
-  const cx=(from.x+dx*step/steps)/cell-.5,cy=(from.y+dy*step/steps)/cell-.5;
-  const moved=transferSand(cx,cy,8,(x,y,r,move)=>{
-   const lateral=(x-cx)*nx+(y-cy)*ny;
-   const right=Math.max(0,Math.min(1,.5+lateral));
-   const centerX=x-lateral*nx,centerY=y-lateral*ny;
-   const amount=strength*(1-r*r)**2;
-   // Spread each ridge across the shoulder instead of forming a second sharp line.
-   for(const [offset,weight] of [[8.5,.28],[11,.48],[14,.24]]){
-    const ox=nx*offset/cell,oy=ny*offset/cell;
-    if(right)move(centerX+ox,centerY+oy,amount*right*weight);
-    if(right<1)move(centerX-ox,centerY-oy,amount*(1-right)*weight);
-   }
+async function loadModels(){
+ if(models)return models;
+ if(!loading)loading=(async()=>{
+  const {FilesetResolver,FaceLandmarker,HandLandmarker}=await import(visionUrl+'/vision_bundle.mjs');
+  const files=await FilesetResolver.forVisionTasks(visionUrl+'/wasm');
+  const faceModel=await FaceLandmarker.createFromOptions(files,{
+   baseOptions:{modelAssetPath:modelUrl+'/face_landmarker/face_landmarker/float16/1/face_landmarker.task'},
+   runningMode:'VIDEO',numFaces:1
   });
-  emitStrokeGrains((cx+.5)*cell,(cy+.5)*cell,nx,ny,moved);
+  try{
+   const handModel=await HandLandmarker.createFromOptions(files,{
+    baseOptions:{modelAssetPath:modelUrl+'/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
+    runningMode:'VIDEO',numHands:1
+   });
+   return models={face:faceModel,hand:handModel};
+  }catch(error){faceModel.close();throw error;}
+ })().finally(()=>{loading=null;});
+ return loading;
+}
+start.onclick=async()=>{
+ const attempt=++session;
+ start.disabled=true;
+ status.textContent='카메라를 열고 얼굴과 손 추적을 준비하고 있어요.';
+ try{
+  if(!navigator.mediaDevices?.getUserMedia)throw new Error('HTTPS 주소에서 열어주세요.');
+  const camera=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:960},height:{ideal:540}},audio:false});
+  if(attempt!==session){camera.getTracks().forEach(track=>track.stop());return;}
+  stream=camera;video.srcObject=camera;stop.disabled=false;
+  await video.play();
+  await loadModels();
+  if(attempt!==session)return;
+  lastVideoTime=-1;lastInference=0;
+  status.textContent='카메라를 바라보고 검지를 얼굴 점에 가져가세요.';
+ }catch(error){
+  if(attempt!==session)return;
+  endCamera();
+  status.textContent='카메라 권한과 인터넷 연결을 확인해 주세요. '+error.message;
+ }
+};
+function endCamera(){
+ session++;
+ stream?.getTracks().forEach(track=>track.stop());
+ stream=null;video.srcObject=null;
+ face=[];finger=previousFinger=null;mouseDown=false;smoke=[];nextHit=0;erased.clear();
+ start.disabled=false;stop.disabled=true;reset.disabled=true;
+}
+stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 화면의 빛 점에 검지를 가져가세요.';};
+window.addEventListener('pagehide',endCamera);
+reset.onclick=()=>{erased.clear();smoke=[];previousFinger=null;nextHit=performance.now()+280;};
+
+function project(point,transform){
+ return {x:transform.x+(1-point.x)*transform.width,y:transform.y+point.y*transform.height};
+}
+function track(t){
+ if(!models||!stream||video.readyState<2||t-lastInference<45||video.currentTime===lastVideoTime)return;
+ lastInference=t;lastVideoTime=video.currentTime;
+ const fit=Math.min(frameWidth/video.videoWidth,frameHeight/video.videoHeight);
+ const scale=frameWidth<frameHeight?Math.max(fit,frameHeight*.62/video.videoHeight):fit;
+ const width=video.videoWidth*scale,height=video.videoHeight*scale;
+ const transform={x:(frameWidth-width)/2,y:(frameHeight-height)/2,width,height};
+ try{
+  const landmarks=models.face.detectForVideo(video,t).faceLandmarks[0];
+  const hand=models.hand.detectForVideo(video,t).landmarks[0];
+  face=landmarks?landmarks.map((point,id)=>{
+   const projected=project(point,transform),old=face[id];
+   return {x:old?old.x+(projected.x-old.x)*.55:projected.x,
+           y:old?old.y+(projected.y-old.y)*.55:projected.y,
+           depth:point.z};
+  }):[];
+  reset.disabled=!landmarks;
+  status.textContent=landmarks?'검지로 빛 점을 건드려 보세요. 마우스나 화면 터치로도 시험할 수 있어요.':'카메라 가운데에 얼굴을 보여주세요.';
+  if(!hand){finger=previousFinger=null;return;}
+  const tip=project(hand[8],transform);
+  previousFinger=finger;finger=tip;
+  if(!mouseDown)touchPoint(tip,previousFinger,t);
+ }catch(error){
+  endCamera();
+  status.textContent='추적이 멈췄어요. 웹캠을 다시 켜주세요.';
+  console.error(error);
  }
 }
-function emitStrokeGrains(x,y,nx,ny,moved){
- const count=Math.min(10,Math.round(moved*1.4));
- for(let i=0;i<count;i++){
-  const side=i%2===0?-1:1;
-  const start=2+Math.random()*3,end=8.5+Math.random()*5.5;
-  const along=(Math.random()-.5)*9;
-  strokeGrains.push({x:x-ny*along+nx*side*start,y:y+nx*along+ny*side*start,
-   dx:nx*side*(end-start),dy:ny*side*(end-start),age:0,duration:.12+Math.random()*.13,
-   size:.35+Math.random()*.55,tone:Math.random()<.5?'#e3cda9':'#9e825d'});
+function touchPoint(point,previous,t){
+ if(t<nextHit||!face.length)return false;
+ const dx=previous?point.x-previous.x:0,dy=previous?point.y-previous.y:0;
+ const length=dx*dx+dy*dy;
+ // Avoid hits along a sudden tracking jump.
+ const bridge=length>0&&length<55*55;
+ let closest=-1,best=8*8;
+ for(let id=0;id<face.length;id++){
+  if(erased.has(id))continue;
+  const dot=face[id];
+  const u=bridge?Math.max(0,Math.min(1,((dot.x-previous.x)*dx+(dot.y-previous.y)*dy)/length)):1;
+  const x=bridge?previous.x+dx*u:point.x,y=bridge?previous.y+dy*u:point.y;
+  const distance=(dot.x-x)**2+(dot.y-y)**2;
+  if(distance<best){best=distance;closest=id;}
  }
- if(strokeGrains.length>360)strokeGrains.splice(0,strokeGrains.length-360);
+ if(closest<0)return false;
+ erased.add(closest);nextHit=t+100;
+ releaseSmoke(face[closest],dx,dy);
+ return true;
 }
-function drawStrokeGrains(dt){
- strokeGrains=strokeGrains.filter(grain=>{
-  grain.age+=dt;
-  if(grain.age>=grain.duration)return false;
-  const progress=grain.age/grain.duration;
-  const travel=1-(1-progress)**2;
-  g.globalAlpha=.62*Math.min(1,(1-progress)*4);
-  g.fillStyle=grain.tone;
-  g.fillRect(grain.x+grain.dx*travel,grain.y+grain.dy*travel,grain.size,grain.size);
+function releaseSmoke(point,dx,dy){
+ for(let i=0;i<23;i++){
+  const angle=Math.random()*Math.PI*2,speed=5+Math.random()*31;
+  smoke.push({x:point.x,y:point.y,age:0,life:.65+Math.random()*.95,
+   vx:Math.cos(angle)*speed+Math.max(-17,Math.min(17,dx*.85)),
+   vy:Math.sin(angle)*speed-13+Math.max(-12,Math.min(12,dy*.6)),
+   phase:Math.random()*Math.PI*2,size:2+Math.random()*10,
+   tone:i%3,brightness:i%4===0?.65:.36});
+ }
+ if(smoke.length>420)smoke.splice(0,smoke.length-420);
+}
+function pointAt(event){
+ const r=canvas.getBoundingClientRect();
+ return {x:event.clientX-r.left,y:event.clientY-r.top};
+}
+canvas.onpointerdown=event=>{
+ if(event.button!==0||!face.length)return;
+ mouseDown=true;canvas.setPointerCapture(event.pointerId);
+ touchPoint(pointAt(event),null,performance.now());
+};
+canvas.onpointermove=event=>{if(mouseDown)touchPoint(pointAt(event),null,performance.now());};
+canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=()=>{mouseDown=false;};
+
+function render(t){
+ const dt=Math.min(.05,(t-lastFrame)/1000||0);lastFrame=t;
+ track(t);
+ ctx.globalCompositeOperation='source-over';
+ ctx.fillStyle='#000';ctx.fillRect(0,0,frameWidth,frameHeight);
+ ctx.globalCompositeOperation='lighter';
+ for(let id=0;id<face.length;id++){
+  if(erased.has(id))continue;
+  const point=face[id],size=Math.max(2.4,Math.min(6,3.9-point.depth*22));
+  ctx.globalAlpha=.68;
+  ctx.drawImage(sprites[1],point.x-size,point.y-size,size*2,size*2);
+  ctx.globalAlpha=.84;
+  ctx.fillStyle='#d3ebff';ctx.fillRect(point.x-.55,point.y-.55,1.1,1.1);
+ }
+ smoke=smoke.filter(particle=>{
+  particle.age+=dt;
+  if(particle.age>=particle.life)return false;
+  const progress=particle.age/particle.life;
+  particle.x+=(particle.vx+Math.sin(particle.phase+particle.age*5)*13)*dt;
+  particle.y+=particle.vy*dt;particle.vx*=Math.exp(-dt*1.9);
+  const size=particle.size*(.55+progress*2.2);
+  ctx.globalAlpha=(1-progress)**2*particle.brightness;
+  ctx.drawImage(sprites[particle.tone],particle.x-size,particle.y-size,size*2,size*2);
   return true;
  });
- g.globalAlpha=1;
-}
-function sweepSand(from,to,gatherCenter){
- const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
- if(distance<.65||distance>100)return;
- rubSand(distance);
- const steps=Math.ceil(distance/5),ux=dx/distance,uy=dy/distance;
- for(let step=1;step<=steps;step++){
-  const cx=(from.x+dx*step/steps)/cell-.5,cy=(from.y+dy*step/steps)/cell-.5;
-  const radius=gatherCenter?Math.max(27,Math.min(50,Math.min(w,h)*.085)):35;
-  transferSand(cx,cy,radius,(x,y,r,move)=>{
-   const side=(x-cx)*(-uy)+(y-cy)*ux;
-   let pushX=ux*14/cell+uy*side*.28,pushY=uy*14/cell-ux*side*.28;
-   if(gatherCenter){
-    const towardX=gatherCenter.x/cell-.5-cx;
-    const towardY=gatherCenter.y/cell-.5-cy;
-    const gap=Math.hypot(towardX,towardY);
-    // Move the footprint as a band so the two flows form a ridge.
-    const travel=Math.min(32/cell,Math.max(0,gap-9/cell))/Math.max(1,gap);
-    pushX=towardX*travel;
-    pushY=towardY*travel;
-   }
-   if(gatherCenter&&Math.hypot(pushX,pushY)<.5)return;
-   const fraction=gatherCenter ? .32*(1-r*r) : .16*(1-r);
-   const height=mass[y*massCols+x];
-   const available=gatherCenter ? Math.max(0,1-.52/Math.max(.001,height)) : 1;
-   move(x+pushX,y+pushY,Math.min(fraction,available));
-  });
-  if(gatherCenter)refillGrooves(cx,cy,radius);
-  settleSand(cx,cy);
+ ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
+ if(finger){
+  ctx.strokeStyle='#a2dbff9c';ctx.lineWidth=1;
+  ctx.beginPath();ctx.arc(finger.x,finger.y,7,0,Math.PI*2);ctx.stroke();
  }
- for(let i=0;i<8;i++)grains.push({x:to.x+(Math.random()-.5)*45,y:to.y+(Math.random()-.5)*45,vx:ux*(20+Math.random()*35),vy:uy*(20+Math.random()*35),life:0,ttl:.3+Math.random()*.3});
+ requestAnimationFrame(render);
 }
-const refillOffsets=[[-2,0],[2,0],[0,-2],[0,2],[-4,0],[4,0],[0,-4],[0,4]];
-function refillGrooves(cx,cy,radius){
- const reach=radius/cell;
- for(let y=Math.max(0,Math.ceil(cy-reach));y<=Math.min(massRows-1,Math.floor(cy+reach));y++){
-  for(let x=Math.max(0,Math.ceil(cx-reach));x<=Math.min(massCols-1,Math.floor(cx+reach));x++){
-   const i=y*massCols+x;
-   if(mass[i]>=.72||Math.hypot(x-cx,y-cy)>reach)continue;
-   for(const [ox,oy] of refillOffsets){
-    const nx=x+ox,ny=y+oy;
-    if(nx<0||nx>=massCols||ny<0||ny>=massRows)continue;
-    const donor=ny*massCols+nx;
-    const amount=Math.min(.18,.86-mass[i],Math.max(0,mass[donor]-.74));
-    mass[donor]-=amount;mass[i]+=amount;
-   }
-  }
- }
-}
-function settleSand(cx,cy){
- const reach=Math.ceil(65/cell);
- for(let y=Math.max(0,Math.floor(cy)-reach);y<Math.min(massRows-1,cy+reach);y++){
-  for(let x=Math.max(0,Math.floor(cx)-reach);x<Math.min(massCols-1,cx+reach);x++){
-   const i=y*massCols+x;
-   for(const j of [i+1,i+massCols]){
-    const difference=mass[i]-mass[j];
-    if(Math.abs(difference)<.24)continue;
-    const flow=(Math.abs(difference)-.24)*.17*Math.sign(difference);
-    mass[i]-=flow;mass[j]+=flow;
-   }
-  }
- }
-}
-function drawRelief(){
- if(massDirty){
-  const pixels=reliefPixels.data;
-  for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
-   const i=y*massCols+x,height=mass[i];
-   const slopeX=mass[x>0?i-1:i]-mass[x+1<massCols?i+1:i];
-   const slopeY=mass[y>0?i-massCols:i]-mass[y+1<massRows?i+massCols:i];
-   // Surface rising toward the lower right faces the light at the upper left.
-   const light=Math.max(-.32,Math.min(.32,-.54*(slopeX*.77+slopeY*.63)+Math.min(0,height-1)*.11));
-   const color=light<0?0:255;
-   pixels[i*4]=color;pixels[i*4+1]=color;pixels[i*4+2]=color;
-   pixels[i*4+3]=Math.abs(light)*255;
-  }
-  reliefContext.putImageData(reliefPixels,0,0);
-  massDirty=false;
- }
- g.drawImage(reliefLayer,0,0,massCols*cell,massRows*cell);
-}
-function size(){
- const bounds=c.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2.5,Math.sqrt(3200000/Math.max(1,bounds.width*bounds.height)));
- const pixelWidth=Math.round(bounds.width*dpr),pixelHeight=Math.round(bounds.height*dpr);
- if(mass&&w===bounds.width&&h===bounds.height&&c.width===pixelWidth&&c.height===pixelHeight)return;
- const oldMass=mass,oldCols=massCols,oldRows=massRows;
- w=bounds.width;h=bounds.height;c.width=pixelWidth;c.height=pixelHeight;
- g.setTransform(dpr,0,0,dpr,0,0);
- fillSand();resetMass();
- if(oldMass){
-  for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
-   const oldX=Math.min(oldCols-1,Math.floor((x+.5)*oldCols/massCols));
-   const oldY=Math.min(oldRows-1,Math.floor((y+.5)*oldRows/massRows));
-   mass[y*massCols+x]=oldMass[oldY*oldCols+oldX];
-  }
- }
- resetHand();grains=[];strokeGrains=[];
-}
-new ResizeObserver(size).observe(c);size();
-function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
-function beginStroke(p){lastRubTime=0;drawing=true;previous={...p};}
-function endStroke(){drawing=false;previous=null;hushSand();}
-function drawSample(p){
- if(!drawing)return;if(!previous){beginStroke(p);return;}
- const dx=p.x-previous.x,dy=p.y-previous.y,distance=Math.hypot(dx,dy);if(distance<.7)return;
- // Lost tracking must never cut a long line across the board.
- if(distance>Math.max(100,Math.min(w,h)*.24)){previous={...p};hushSand();return;}
- rubSand(distance);
- displaceStroke(previous,p);
- previous={...p};
-}
-
-c.addEventListener('pointerdown',e=>{if(inputMode.value!=='mouse'||e.button!==0)return;beginStroke(point(e));c.setPointerCapture(e.pointerId);});
-c.addEventListener('pointermove',e=>{if(inputMode.value!=='mouse'||!drawing)return;const samples=e.getCoalescedEvents?.()||[];for(const q of samples.length?samples:[e])drawSample(point(q));});
-function release(e){if(inputMode.value!=='mouse')return;endStroke();if(c.hasPointerCapture(e.pointerId))c.releasePointerCapture(e.pointerId);}
-c.addEventListener('pointerup',release);c.addEventListener('pointercancel',release);c.addEventListener('lostpointercapture',()=>{if(inputMode.value==='mouse')endStroke();});
-window.addEventListener('blur',()=>resetHand());
-document.getElementById('clearSand').onclick=()=>{resetHand();grains=[];strokeGrains=[];fillSand();resetMass();status.textContent='모래를 평평하게 골랐어요. 새 그림을 그려보세요.';};
-start.onclick=async()=>{start.disabled=true;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('localhost 또는 HTTPS 주소에서 열어주세요.');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});v.srcObject=stream;await v.play();lastVideoTime=-1;lastDetect=-Infinity;trackingFailed=false;stop.disabled=false;void prepareFaceDetector();if(inputMode.value==='hand')void prepareHandDetector();status.textContent='웹캠이 켜졌어요. 검지만 펴서 그리거나 손끝을 모아 모래를 쓸어보세요.';}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;start.disabled=false;status.textContent='카메라를 켜지 못했어요. 브라우저 카메라 권한과 다른 앱의 사용 여부를 확인해주세요. '+e.message;}};
-function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.srcObject=null;resetHand();handStatus.textContent='손 인식 대기 중';hg.clearRect(0,0,320,180);faceBox=null;lastFaceSeen=-Infinity;pg.clearRect(0,0,preview.width,preview.height);tracking.textContent='웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.';start.disabled=false;stop.disabled=true;status.textContent='웹캠을 껐어요. 마우스 테스트로 모래를 그릴 수 있어요.';}stop.onclick=end;window.addEventListener('pagehide',end);
-
-function frame(t){
- updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
- g.drawImage(photoBase,0,0,w,h);
- drawRelief();
- drawStrokeGrains(dt);
- for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#e2caa4';g.fillRect(grain.x,grain.y,.85,.85);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
- const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(50,44,36,.13)');g.fillStyle=shade;g.fillRect(0,0,w,h);
- drawHandCursor();requestAnimationFrame(frame);
-}requestAnimationFrame(frame);
-})();
-</script></html>
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
