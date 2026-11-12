@@ -34,6 +34,8 @@ const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
 let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
+const smokeCanvas=document.createElement('canvas'),smokeContext=smokeCanvas.getContext('2d');
+let smokeGrid,smokeScratch,smokeImage,flowTime=0,smokeAlive=false,smokeUntil=0;
 const sprites=['#527ff1','#79c6ff','#ceeeff'].map(color=>{
  const sprite=document.createElement('canvas');
  sprite.width=sprite.height=64;
@@ -52,7 +54,7 @@ function resize(){
  canvas.height=Math.max(1,Math.round(frameHeight*scale));
  ctx.setTransform(scale,0,0,scale,0,0);
  // Old screen coordinates are invalid after orientation or viewport changes.
- face=[];handCloud=[];smoke=[];
+ face=[];handCloud=[];sizeSmoke();
 }
 new ResizeObserver(resize).observe(canvas);resize();
 
@@ -99,12 +101,12 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];handCloud=[];mouseDown=false;smoke=[];nextHit=0;erased.clear();
+ face=[];handCloud=[];mouseDown=false;clearSmoke();nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;reset.disabled=true;
 }
 stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.';};
 window.addEventListener('pagehide',endCamera);
-reset.onclick=()=>{erased.clear();smoke=[];nextHit=performance.now()+280;};
+reset.onclick=()=>{erased.clear();clearSmoke();nextHit=performance.now()+280;};
 
 function project(point,transform){
  return {x:transform.x+(1-point.x)*transform.width,y:transform.y+point.y*transform.height};
@@ -170,75 +172,80 @@ function touchPaths(paths,t,radius){
  releaseSmoke(face[closest],drift);
  return true;
 }
+function sizeSmoke(){
+ const cell=Math.max(3,Math.max(frameWidth,frameHeight)/230);
+ smokeCanvas.width=Math.max(1,Math.ceil(frameWidth/cell));
+ smokeCanvas.height=Math.max(1,Math.ceil(frameHeight/cell));
+ smokeImage=smokeContext.createImageData(smokeCanvas.width,smokeCanvas.height);
+ smokeGrid=new Float32Array(smokeCanvas.width*smokeCanvas.height);
+ smokeScratch=new Float32Array(smokeGrid.length);
+ clearSmoke();
+}
+function clearSmoke(){
+ smoke=[];smokeAlive=false;smokeUntil=0;
+ smokeGrid?.fill(0);smokeScratch?.fill(0);
+}
 function releaseSmoke(point,dx){
- const neighbor=smoke.findLast(plume=>plume.age-plume.lastTouch<.32&&Math.hypot(plume.x-point.x,plume.y-point.y)<42);
- if(neighbor){
-  neighbor.lastTouch=neighbor.age;
-  neighbor.density=Math.min(1.45,neighbor.density+.12);
+ const x=point.x/frameWidth*smokeCanvas.width,y=point.y/frameHeight*smokeCanvas.height;
+ const nearby=smoke.find(source=>source.remaining>.08&&Math.hypot(source.x-x,source.y-y)<5);
+ if(nearby){
+  nearby.remaining=Math.max(nearby.remaining,1.35);
+  nearby.intensity=Math.min(1.55,nearby.intensity+.18);
   return;
  }
- const rise=Math.max(105,point.y+92);
- const curl=Math.min(frameWidth*.23,Math.max(24,rise*.25));
- const side=Math.abs(dx)>4?Math.sign(dx):point.x>frameWidth/2?-1:1;
- smoke.push({x:point.x,y:point.y,age:0,lastTouch:0,duration:2.6+rise/180,rise,
-  curl:curl*side,density:1,phase:Math.random()*Math.PI*2});
- if(smoke.length>24)smoke.splice(0,smoke.length-24);
+ smoke.push({x,y,remaining:1.65,intensity:1.05,phase:Math.random()*6.28,drift:Math.max(-1.3,Math.min(1.3,dx*.045))});
+ if(smoke.length>14)smoke.shift();
+ smokeAlive=true;
+ smokeUntil=flowTime+9;
 }
-// The plume rises almost straight, folds once, then opens into a soft taper.
-const smokeCurve=[
- [[0,0],[-.1,.13],[1.04,.27],[.69,.46]],
- [[.69,.46],[.28,.67],[-.69,.30],[-.57,.51]],
- [[-.57,.51],[-.5,.7],[-.13,.78],[-.47,1]]
-];
-function smokePoint(plume,t){
- const index=Math.min(2,Math.floor(t*3)),u=t*3-index,v=1-u;
- const [a,b,c,d]=smokeCurve[index];
- const cubic=axis=>v*v*v*a[axis]+3*v*v*u*b[axis]+3*v*u*u*c[axis]+u*u*u*d[axis];
- const sway=Math.sin(plume.phase+plume.age*.72+t*8)*Math.sin(t*Math.PI/2)*7;
- return {x:plume.x+plume.curl*cubic(0)+sway,y:plume.y-plume.rise*cubic(1)};
+function sampleSmoke(x,y,cols,rows){
+ const x0=Math.floor(x),y0=Math.floor(y),fx=x-x0,fy=y-y0;
+ const at=(i,j)=>i>=0&&j>=0&&i<cols&&j<rows?smokeGrid[j*cols+i]:0;
+ return (at(x0,y0)*(1-fx)+at(x0+1,y0)*fx)*(1-fy)
+       +(at(x0,y0+1)*(1-fx)+at(x0+1,y0+1)*fx)*fy;
 }
 function drawSmoke(dt){
- smoke=smoke.filter(plume=>{
-  plume.age+=dt;
-  const front=plume.age/plume.duration;
-  const back=(plume.age-Math.min(.8,plume.lastTouch))/plume.duration-.76;
-  if(back>=1)return false;
-  const start=Math.max(0,back),end=Math.min(1,front);
-  if(end-start<.002)return true;
-  const samples=[];
-  for(let i=0;i<=48;i++){
-   const t=start+(end-start)*i/48;
-   const point=smokePoint(plume,t);
-   const prior=smokePoint(plume,Math.max(0,t-.006)),next=smokePoint(plume,Math.min(1,t+.006));
-   const dx=next.x-prior.x,dy=next.y-prior.y,length=Math.hypot(dx,dy)||1;
-   const edge=Math.sin(Math.PI*i/48)**.7;
-   const width=(1.1+10*t+3*Math.sin(t*Math.PI))*edge;
-   samples.push({...point,nx:-dy/length,ny:dx/length,width});
+ if(!smokeAlive||dt<=0)return;
+ flowTime+=dt;
+ if(flowTime>smokeUntil){clearSmoke();return;}
+ const cols=smokeCanvas.width,rows=smokeCanvas.height;
+ const t=flowTime,buoyancy=rows*.22,fade=Math.exp(-dt*.67);
+ // Smooth, changing currents bend the rising column and pull its edges into folds.
+ for(let y=0;y<rows;y++){
+  const broad=Math.sin(y*.076+t*.83),fine=Math.sin(y*.16-t*1.15);
+  for(let x=0;x<cols;x++){
+   const eddy=x*.095+y*.065+t*.73;
+   const vx=cols*(.082*broad+.038*fine+.055*Math.sin(eddy));
+   const vy=-buoyancy+rows*(.055*Math.cos(eddy)+.031*Math.sin(x*.18-y*.095+t*.96));
+   smokeScratch[y*cols+x]=sampleSmoke(x-vx*dt,y-vy*dt,cols,rows)*fade;
   }
-  const tail=samples[0],tip=samples.at(-1);
-  const gradient=ctx.createLinearGradient(tail.x,tail.y,tip.x,tip.y);
-  const density=plume.density*(1-Math.max(0,back)*.6);
-  gradient.addColorStop(0,'rgba(192,205,219,0)');
-  gradient.addColorStop(.23,'rgba(192,205,219,'+(.23*density)+')');
-  gradient.addColorStop(.68,'rgba(172,184,200,'+(.14*density)+')');
-  gradient.addColorStop(1,'rgba(172,184,200,0)');
-  ctx.fillStyle=gradient;
-  for(const [offset,spread,opacity] of [[0,2.35,.17],[0,1.35,.32],[-.45,.53,.55],[.4,.28,.65],[-.14,.16,.56]]){
-   ctx.globalAlpha=opacity;
-   ctx.beginPath();
-   for(let i=0;i<samples.length;i++){
-    const p=samples[i],distance=p.width*(offset+spread);
-    const x=p.x+p.nx*distance,y=p.y+p.ny*distance;
-    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+ }
+ [smokeGrid,smokeScratch]=[smokeScratch,smokeGrid];
+ smoke=smoke.filter(source=>{
+  source.remaining-=dt;
+  if(source.remaining<=0)return false;
+  const x=source.x+Math.sin(t*2.1+source.phase)*.65+source.drift;
+  const y=source.y-.6;
+  const strength=dt*18*source.intensity*Math.min(1,source.remaining*4);
+  for(let j=Math.max(0,Math.floor(y-3));j<=Math.min(rows-1,Math.ceil(y+3));j++){
+   for(let i=Math.max(0,Math.floor(x-3));i<=Math.min(cols-1,Math.ceil(x+3));i++){
+    const radius=(i-x)**2+(j-y)**2;
+    const index=j*cols+i;
+    smokeGrid[index]=Math.min(1.6,smokeGrid[index]+strength*Math.exp(-radius*.87));
    }
-   for(let i=samples.length-1;i>=0;i--){
-    const p=samples[i],distance=p.width*(offset-spread);
-    ctx.lineTo(p.x+p.nx*distance,p.y+p.ny*distance);
-   }
-   ctx.closePath();ctx.fill();
   }
   return true;
  });
+ const pixels=smokeImage.data;
+ for(let i=0;i<smokeGrid.length;i++){
+  const strength=Math.max(0,smokeGrid[i]-.006);
+  pixels[i*4]=191;pixels[i*4+1]=196;pixels[i*4+2]=205;
+  pixels[i*4+3]=Math.min(112,strength*190);
+ }
+ smokeContext.putImageData(smokeImage,0,0);
+ ctx.globalAlpha=1;
+ ctx.globalCompositeOperation='source-over';
+ ctx.drawImage(smokeCanvas,0,0,frameWidth,frameHeight);
 }
 function pointAt(event){
  const r=canvas.getBoundingClientRect();
