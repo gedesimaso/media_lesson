@@ -171,46 +171,72 @@ function touchPaths(paths,t,radius){
  return true;
 }
 function releaseSmoke(point,dx){
- const rise=Math.max(80,point.y+85);
- const drift=Math.max(-24,Math.min(24,dx));
- for(let strand=0;strand<3;strand++){
-  smoke.push({x:point.x,y:point.y,age:0,delay:strand*.12,
-   duration:Math.max(2.8,rise/128+1.35)*(1+strand*.065),rise,
-   drift:drift+(strand-1)*17,phase:Math.random()*Math.PI*2,
-   strength:strand===0?1:.48,width:strand===0?1.1:.7});
+ const neighbor=smoke.findLast(plume=>plume.age-plume.lastTouch<.32&&Math.hypot(plume.x-point.x,plume.y-point.y)<42);
+ if(neighbor){
+  neighbor.lastTouch=neighbor.age;
+  neighbor.density=Math.min(1.45,neighbor.density+.12);
+  return;
  }
- if(smoke.length>96)smoke.splice(0,smoke.length-96);
+ const rise=Math.max(105,point.y+92);
+ const curl=Math.min(frameWidth*.23,Math.max(24,rise*.25));
+ const side=Math.abs(dx)>4?Math.sign(dx):point.x>frameWidth/2?-1:1;
+ smoke.push({x:point.x,y:point.y,age:0,lastTouch:0,duration:2.6+rise/180,rise,
+  curl:curl*side,density:1,phase:Math.random()*Math.PI*2});
+ if(smoke.length>24)smoke.splice(0,smoke.length-24);
 }
-function smokePoint(strand,t){
- const curl=Math.sin(strand.phase+t*9)*19+Math.sin(strand.phase*.5+t*18)*6;
- return {x:strand.x+strand.drift*t+curl*Math.min(1,t*2.8),
-         y:strand.y-strand.rise*(.67*t+.33*t*t)};
+// The plume rises almost straight, folds once, then opens into a soft taper.
+const smokeCurve=[
+ [[0,0],[-.1,.13],[1.04,.27],[.69,.46]],
+ [[.69,.46],[.28,.67],[-.69,.30],[-.57,.51]],
+ [[-.57,.51],[-.5,.7],[-.13,.78],[-.47,1]]
+];
+function smokePoint(plume,t){
+ const index=Math.min(2,Math.floor(t*3)),u=t*3-index,v=1-u;
+ const [a,b,c,d]=smokeCurve[index];
+ const cubic=axis=>v*v*v*a[axis]+3*v*v*u*b[axis]+3*v*u*u*c[axis]+u*u*u*d[axis];
+ const sway=Math.sin(plume.phase+plume.age*.72+t*8)*Math.sin(t*Math.PI/2)*7;
+ return {x:plume.x+plume.curl*cubic(0)+sway,y:plume.y-plume.rise*cubic(1)};
 }
 function drawSmoke(dt){
- smoke=smoke.filter(strand=>{
-  strand.age+=dt;
-  const front=(strand.age-strand.delay)/strand.duration;
-  const back=front-.58;
+ smoke=smoke.filter(plume=>{
+  plume.age+=dt;
+  const front=plume.age/plume.duration;
+  const back=(plume.age-Math.min(.8,plume.lastTouch))/plume.duration-.76;
   if(back>=1)return false;
-  if(front<=0)return true;
   const start=Math.max(0,back),end=Math.min(1,front);
-  const tail=smokePoint(strand,start),tip=smokePoint(strand,end);
-  const gradient=ctx.createLinearGradient(tail.x,tail.y,tip.x,tip.y);
-  const fade=Math.min(1,front*9)*(1-Math.min(.8,Math.max(0,back)*.68))*strand.strength;
-  gradient.addColorStop(0,'rgba(119,147,185,0)');
-  gradient.addColorStop(.32,'rgba(146,174,211,'+(.46*fade)+')');
-  gradient.addColorStop(.73,'rgba(176,199,226,'+(.29*fade)+')');
-  gradient.addColorStop(1,'rgba(161,185,219,0)');
-  ctx.beginPath();ctx.moveTo(tail.x,tail.y);
-  for(let step=1;step<=28;step++){
-   const point=smokePoint(strand,start+(end-start)*step/28);
-   ctx.lineTo(point.x,point.y);
+  if(end-start<.002)return true;
+  const samples=[];
+  for(let i=0;i<=48;i++){
+   const t=start+(end-start)*i/48;
+   const point=smokePoint(plume,t);
+   const prior=smokePoint(plume,Math.max(0,t-.006)),next=smokePoint(plume,Math.min(1,t+.006));
+   const dx=next.x-prior.x,dy=next.y-prior.y,length=Math.hypot(dx,dy)||1;
+   const edge=Math.sin(Math.PI*i/48)**.7;
+   const width=(1.1+10*t+3*Math.sin(t*Math.PI))*edge;
+   samples.push({...point,nx:-dy/length,ny:dx/length,width});
   }
-  ctx.strokeStyle=gradient;
-  ctx.lineCap='round';ctx.lineJoin='round';
-  ctx.globalAlpha=.13;ctx.lineWidth=strand.width*15;ctx.stroke();
-  ctx.globalAlpha=.27;ctx.lineWidth=strand.width*6;ctx.stroke();
-  ctx.globalAlpha=.7;ctx.lineWidth=strand.width*1.9;ctx.stroke();
+  const tail=samples[0],tip=samples.at(-1);
+  const gradient=ctx.createLinearGradient(tail.x,tail.y,tip.x,tip.y);
+  const density=plume.density*(1-Math.max(0,back)*.6);
+  gradient.addColorStop(0,'rgba(192,205,219,0)');
+  gradient.addColorStop(.23,'rgba(192,205,219,'+(.23*density)+')');
+  gradient.addColorStop(.68,'rgba(172,184,200,'+(.14*density)+')');
+  gradient.addColorStop(1,'rgba(172,184,200,0)');
+  ctx.fillStyle=gradient;
+  for(const [offset,spread,opacity] of [[0,2.35,.17],[0,1.35,.32],[-.45,.53,.55],[.4,.28,.65],[-.14,.16,.56]]){
+   ctx.globalAlpha=opacity;
+   ctx.beginPath();
+   for(let i=0;i<samples.length;i++){
+    const p=samples[i],distance=p.width*(offset+spread);
+    const x=p.x+p.nx*distance,y=p.y+p.ny*distance;
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+   }
+   for(let i=samples.length-1;i>=0;i--){
+    const p=samples[i],distance=p.width*(offset-spread);
+    ctx.lineTo(p.x+p.nx*distance,p.y+p.ny*distance);
+   }
+   ctx.closePath();ctx.fill();
+  }
   return true;
  });
 }
