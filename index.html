@@ -91,10 +91,11 @@ function processHands(hands){
           y:h*edge.reduce((sum,p)=>sum+p.y,0)/edge.length};
  }).sort((a,b)=>a.x-b.x);
  if(previousPair){
-  const gap=pair[1].x-pair[0].x;
-  const oldGap=previousPair[1].x-previousPair[0].x;
-  const close=Math.hypot(gap,pair[1].y-pair[0].y)<Math.min(w,h)*.68;
-  if(close&&oldGap-gap>1&&Math.abs(pair[1].y-pair[0].y)<Math.min(w,h)*.28){
+  const gap=Math.hypot(pair[1].x-pair[0].x,pair[1].y-pair[0].y);
+  const oldGap=Math.hypot(previousPair[1].x-previousPair[0].x,previousPair[1].y-previousPair[0].y);
+  // Accumulate slow movements before updating the last accepted hand positions.
+  if(Math.abs(oldGap-gap)<2.5)return;
+  if(oldGap>gap&&gap<Math.hypot(w,h)*.84){
    const center={x:(pair[0].x+pair[1].x)/2,y:(pair[0].y+pair[1].y)/2};
    for(let i=0;i<2;i++)sweepSand(previousPair[i],pair[i],center);
   }
@@ -183,8 +184,9 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)resetHand()
 
 function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;}
 function fillSand(){
- const width=photoBase.width=Math.ceil(w);
- const height=photoBase.height=Math.ceil(h);
+ const density=Math.min(devicePixelRatio||1,2.5,Math.sqrt(3200000/Math.max(1,w*h)));
+ const width=photoBase.width=Math.ceil(w*density);
+ const height=photoBase.height=Math.ceil(h*density);
  if(!width||!height)return;
  let tone=null;
  if(photoReady){
@@ -205,7 +207,7 @@ function fillSand(){
  for(let y=0;y<height;y++)for(let x=0;x<width;x++){
   const i=(y*width+x)*4;
   const grains=(random()+random()-1)*8;
-  const wind=Math.sin(y*.19+x*.071+1.4*Math.sin(x*.012+y*.007))*1.6;
+  const wind=Math.sin((y*.19+x*.071)/density+1.4*Math.sin((x*.012+y*.007)/density))*1.6;
   const daylight=5*(1-x/width)-6*y/height;
   const variation=tone?(tone[i+1]-195)*.32:0;
   const light=grains+wind+daylight+variation;
@@ -218,7 +220,7 @@ function fillSand(){
 }
 
 const reliefLayer=document.createElement('canvas'),reliefContext=reliefLayer.getContext('2d');
-const cell=3;
+const cell=2;
 let mass,massCols,massRows,reliefPixels,massDirty=true;
 function resetMass(cols=Math.ceil(w/cell),rows=Math.ceil(h/cell)){
  massCols=cols;massRows=rows;
@@ -241,6 +243,7 @@ function transferSand(cx,cy,radius,transport){
     const targetX=Math.max(0,Math.min(massCols-1,toX));
     const targetY=Math.max(0,Math.min(massRows-1,toY));
     const amount=mass[source]*fraction;
+    if(amount<=0)return;
     moved+=amount;
     const x0=Math.floor(targetX),y0=Math.floor(targetY);
     const fx=targetX-x0,fy=targetY-y0;
@@ -306,25 +309,51 @@ function drawStrokeGrains(dt){
 }
 function sweepSand(from,to,gatherCenter){
  const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
- if(distance<2||distance>100)return;
+ if(distance<.65||distance>100)return;
  rubSand(distance);
  const steps=Math.ceil(distance/5),ux=dx/distance,uy=dy/distance;
  for(let step=1;step<=steps;step++){
   const cx=(from.x+dx*step/steps)/cell-.5,cy=(from.y+dy*step/steps)/cell-.5;
-  transferSand(cx,cy,35,(x,y,r,move)=>{
+  const radius=gatherCenter?Math.max(27,Math.min(50,Math.min(w,h)*.085)):35;
+  transferSand(cx,cy,radius,(x,y,r,move)=>{
    const side=(x-cx)*(-uy)+(y-cy)*ux;
    let pushX=ux*14/cell+uy*side*.28,pushY=uy*14/cell-ux*side*.28;
    if(gatherCenter){
-    pushX=gatherCenter.x/cell-.5-x;
-    pushY=gatherCenter.y/cell-.5-y;
-    const reach=Math.max(1,Math.hypot(pushX,pushY)/(25/cell));
-    pushX/=reach;pushY/=reach;
+    const towardX=gatherCenter.x/cell-.5-cx;
+    const towardY=gatherCenter.y/cell-.5-cy;
+    const gap=Math.hypot(towardX,towardY);
+    // Move the footprint as a band so the two flows form a ridge.
+    const travel=Math.min(32/cell,Math.max(0,gap-9/cell))/Math.max(1,gap);
+    pushX=towardX*travel;
+    pushY=towardY*travel;
    }
-   move(x+pushX,y+pushY,.16*(1-r));
+   if(gatherCenter&&Math.hypot(pushX,pushY)<.5)return;
+   const fraction=gatherCenter ? .32*(1-r*r) : .16*(1-r);
+   const height=mass[y*massCols+x];
+   const available=gatherCenter ? Math.max(0,1-.52/Math.max(.001,height)) : 1;
+   move(x+pushX,y+pushY,Math.min(fraction,available));
   });
+  if(gatherCenter)refillGrooves(cx,cy,radius);
   settleSand(cx,cy);
  }
  for(let i=0;i<8;i++)grains.push({x:to.x+(Math.random()-.5)*45,y:to.y+(Math.random()-.5)*45,vx:ux*(20+Math.random()*35),vy:uy*(20+Math.random()*35),life:0,ttl:.3+Math.random()*.3});
+}
+const refillOffsets=[[-2,0],[2,0],[0,-2],[0,2],[-4,0],[4,0],[0,-4],[0,4]];
+function refillGrooves(cx,cy,radius){
+ const reach=radius/cell;
+ for(let y=Math.max(0,Math.ceil(cy-reach));y<=Math.min(massRows-1,Math.floor(cy+reach));y++){
+  for(let x=Math.max(0,Math.ceil(cx-reach));x<=Math.min(massCols-1,Math.floor(cx+reach));x++){
+   const i=y*massCols+x;
+   if(mass[i]>=.72||Math.hypot(x-cx,y-cy)>reach)continue;
+   for(const [ox,oy] of refillOffsets){
+    const nx=x+ox,ny=y+oy;
+    if(nx<0||nx>=massCols||ny<0||ny>=massRows)continue;
+    const donor=ny*massCols+nx;
+    const amount=Math.min(.18,.86-mass[i],Math.max(0,mass[donor]-.74));
+    mass[donor]-=amount;mass[i]+=amount;
+   }
+  }
+ }
 }
 function settleSand(cx,cy){
  const reach=Math.ceil(65/cell);
@@ -348,7 +377,7 @@ function drawRelief(){
    const slopeX=mass[x>0?i-1:i]-mass[x+1<massCols?i+1:i];
    const slopeY=mass[y>0?i-massCols:i]-mass[y+1<massRows?i+massCols:i];
    // Surface rising toward the lower right faces the light at the upper left.
-   const light=Math.max(-.32,Math.min(.32,-.36*(slopeX*.77+slopeY*.63)+Math.min(0,height-1)*.11));
+   const light=Math.max(-.32,Math.min(.32,-.54*(slopeX*.77+slopeY*.63)+Math.min(0,height-1)*.11));
    const color=light<0?0:255;
    pixels[i*4]=color;pixels[i*4+1]=color;pixels[i*4+2]=color;
    pixels[i*4+3]=Math.abs(light)*255;
@@ -359,7 +388,7 @@ function drawRelief(){
  g.drawImage(reliefLayer,0,0,massCols*cell,massRows*cell);
 }
 function size(){
- const bounds=c.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2);
+ const bounds=c.getBoundingClientRect(),dpr=Math.min(devicePixelRatio||1,2.5,Math.sqrt(3200000/Math.max(1,bounds.width*bounds.height)));
  const pixelWidth=Math.round(bounds.width*dpr),pixelHeight=Math.round(bounds.height*dpr);
  if(mass&&w===bounds.width&&h===bounds.height&&c.width===pixelWidth&&c.height===pixelHeight)return;
  const oldMass=mass,oldCols=massCols,oldRows=massRows;
