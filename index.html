@@ -25,6 +25,9 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
 #reflection{width:min(100%,39rem);margin:0;line-height:1.95;color:#e8e7e4;font-family:"궁서",Gungsuh,"GungSeo","궁서체",GungsuhChe,"LXGW WenKai KR",serif;font-size:clamp(1.12rem,3.4vw,1.72rem);text-align:left;word-break:keep-all;opacity:0;transition:opacity 1.45s ease}
 #reflection.visible{opacity:1}
 @media (prefers-reduced-motion:reduce){#reflection{transition:none}}
+#intro{position:fixed;z-index:1;inset:auto 16px max(13vh,64px);margin:0 auto;width:max-content;max-width:calc(100% - 32px);text-align:center;color:#e5eff8;font-size:clamp(1rem,3.8vw,1.38rem);line-height:1.55;word-break:keep-all;text-shadow:0 2px 16px #000;pointer-events:none;opacity:0;transition:opacity .65s ease}
+#intro.visible{opacity:1}
+@media (prefers-reduced-motion:reduce){#intro{transition:none}}
 </style>
 </head>
 <body>
@@ -42,6 +45,7 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
  </div>
  <p id="reflection" aria-live="polite" hidden>눈앞에 드러난 모습은 그 자체로 고정된 것이 아니며, 비어 있음은 아무것도 없다는 뜻이 아니다. 수많은 조건이 만나 잠시 모습을 이루고, 그 모습은 다시 조건에 따라 변한다. 그러니 있는 그대로 보되, 그것을 영원한 실체라고 붙들지는 말라.</p>
 </div>
+<p id="intro" role="status" hidden>손을 올려 화면의 빛점들을 잡아보세요.</p>
 <canvas id="scene" aria-label="손으로 스치면 향 연기처럼 피어오르는 얼굴 점과 손의 관절 점"></canvas>
 <video id="camera" autoplay muted playsinline hidden></video>
 <script type="module">
@@ -54,10 +58,18 @@ let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastI
 let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
 const closing=document.getElementById('closing'),verse=document.getElementById('verse');
-const reflection=document.getElementById('reflection');
+const reflection=document.getElementById('reflection'),intro=document.getElementById('intro');
+let introShown=false,introAt=null;
 const glyphs=[...verse.querySelectorAll('span')];
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp01=value=>Math.max(0,Math.min(1,value));
+const readingTime=14,reflectionFade=1.45,betweenVisitors=1.1;
+function hideIntro(){intro.classList.remove('visible');intro.hidden=true;introAt=null;}
+function updateIntro(t){
+ if(introAt===null)return;
+ if(t-introAt>=4200)hideIntro();
+ else if(t-introAt>=3500)intro.classList.remove('visible');
+}
 function hideClosing(){
  closing.hidden=true;verse.hidden=false;reflection.hidden=true;
  reflection.classList.remove('visible');
@@ -91,7 +103,7 @@ function resize(){
  canvas.height=Math.max(1,Math.round(frameHeight*scale));
  ctx.setTransform(scale,0,0,scale,0,0);
  // Old screen coordinates are invalid after orientation or viewport changes.
- if(finale){finale=null;erased.clear();hideClosing();}
+ if(finale){finale=null;erased.clear();hideClosing();introShown=false;hideIntro();}
  face=[];handCloud=[];cameraTransform=null;sizeSmoke();
 }
 new ResizeObserver(resize).observe(canvas);resize();
@@ -139,12 +151,18 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;hideClosing();clearSmoke();nextHit=0;erased.clear();
+ face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;introShown=false;hideIntro();hideClosing();clearSmoke();nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;reset.disabled=true;
 }
 stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.';};
 window.addEventListener('pagehide',endCamera);
-reset.onclick=()=>{finale=null;hideClosing();erased.clear();clearSmoke();nextHit=performance.now()+280;};
+function restartExperience(t){
+ finale=null;introShown=false;hideIntro();hideClosing();
+ erased.clear();clearSmoke();face=[];handCloud=[];mouseDown=false;
+ nextHit=t+280;
+ status.textContent='다음 체험을 시작할 수 있어요. 카메라를 바라봐 주세요.';
+}
+reset.onclick=()=>restartExperience(performance.now());
 
 function project(point,transform){
  return {x:transform.x+(1-point.x)*transform.width,y:transform.y+point.y*transform.height};
@@ -168,6 +186,10 @@ function track(t){
   }):[];
   reset.disabled=!landmarks&&!finale;
   if(finale)return;
+  if(landmarks&&!introShown){
+   introShown=true;introAt=t;intro.hidden=false;
+   requestAnimationFrame(()=>{if(introAt===t)intro.classList.add('visible');});
+  }
   const previousHand=handCloud;
   handCloud=hand?hand.map(point=>project(point,transform)):[];
   status.textContent=!landmarks?'카메라 가운데에 얼굴을 보여주세요.':handCloud.length?'손 인식 중 · 얼굴 점 위로 손을 움직여 보세요.':'손 인식 대기 · 손 전체를 카메라에 보여주세요.';
@@ -278,10 +300,11 @@ function capturePortrait(){
 }
 function beginFinale(){
  if(!capturePortrait())return;
+ hideIntro();
  finale={phase:'waiting',age:0,points:face.map(({x,y})=>({x,y}))};
  status.textContent='마지막 빛 점이 사라졌어요.';
 }
-function updateFinale(dt){
+function updateFinale(dt,t=performance.now()){
  if(!finale)return;
  finale.age+=dt;
  if(finale.phase==='waiting'&&(!footageEffects.length&&flows.every(flow=>flow.last===-Infinity)||finale.age>=5)){
@@ -303,6 +326,13 @@ function updateFinale(dt){
   clearSmoke();finale.phase='reflection';finale.age=0;
   reflection.hidden=false;
   requestAnimationFrame(()=>{if(finale?.phase==='reflection')reflection.classList.add('visible');});
+ }
+ if(finale.phase==='reflection'&&finale.age>=readingTime){
+  reflection.classList.remove('visible');finale.phase='reflectionFade';finale.age=0;
+ }else if(finale.phase==='reflectionFade'&&finale.age>=reflectionFade){
+  hideClosing();finale.phase='betweenVisitors';finale.age=0;
+ }else if(finale.phase==='betweenVisitors'&&finale.age>=betweenVisitors){
+  restartExperience(t);
  }
 }
 function updateVerse(){
@@ -579,7 +609,8 @@ function drawHand(){
 function render(t){
  const dt=Math.min(.05,(t-lastFrame)/1000||0);lastFrame=t;
  track(t);
- updateFinale(dt);
+ updateIntro(t);
+ updateFinale(dt,t);
  ctx.globalAlpha=1;
  ctx.globalCompositeOperation='source-over';
  ctx.fillStyle='#000';ctx.fillRect(0,0,frameWidth,frameHeight);
