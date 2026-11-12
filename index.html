@@ -34,6 +34,9 @@ const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
 let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
+const footage={width:256,height:100,columns:9,frames:45,fps:15};
+const footageAtlas=document.createElement('canvas');
+let footageReady=false,footageEffects=[],footageTurn=0;
 const faceLight=[151,205,246];
 const faceColor='#'+faceLight.map(channel=>channel.toString(16).padStart(2,'0')).join('');
 const smokeCanvas=document.createElement('canvas'),smokeContext=smokeCanvas.getContext('2d');
@@ -174,6 +177,69 @@ function touchPaths(paths,t,radius){
  releaseSmoke(face[closest],drift);
  return true;
 }
+// Smoke footage: Rafael Minguet Delgado, Pexels video 38754631, cropped and color-keyed.
+const footageImage=new Image();
+footageImage.onload=()=>{
+ footageAtlas.width=footageImage.naturalWidth;footageAtlas.height=footageImage.naturalHeight;
+ if(footageAtlas.width!==footage.width*footage.columns||footageAtlas.height!==footage.height*15)return;
+ const paint=footageAtlas.getContext('2d');
+ paint.drawImage(footageImage,0,0);
+ const frame=paint.getImageData(0,0,footageAtlas.width,footageAtlas.height);
+ const pixels=frame.data;
+ for(let y=0;y<footageAtlas.height;y++){
+  const tileY=y%footage.height;
+  const edgeY=Math.min(1,tileY/13,(footage.height-1-tileY)/3);
+  for(let x=0;x<footageAtlas.width;x++){
+   const tileX=x%footage.width;
+   const edge=Math.min(edgeY,tileX/12,(footage.width-1-tileX)/12);
+   const i=(y*footageAtlas.width+x)*4;
+   const alpha=Math.max(0,Math.min(1,(pixels[i]-26)/138))**1.18;
+   pixels[i]=faceLight[0];pixels[i+1]=faceLight[1];pixels[i+2]=faceLight[2];
+   pixels[i+3]=Math.round(alpha*edge*225);
+  }
+ }
+ paint.putImageData(frame,0,0);
+ footageReady=true;
+};
+footageImage.src='./incense-frames.jpg';
+
+function addFootage(point,dx){
+ const nearby=footageEffects.find(effect=>effect.age<.3&&Math.hypot(effect.x-point.x,effect.y-point.y)<18);
+ if(nearby){nearby.brightness=Math.min(1.25,nearby.brightness+.09);return;}
+ const clip=footageTurn++%3;
+ const horizontal=dx<-2?-1:dx>2?1:footageTurn%2===0?-1:1;
+ footageEffects.push({x:point.x,y:point.y,age:0,clip,horizontal,brightness:1,
+  angle:clip===1?.04:clip===2?.31:-.17,
+  size:Math.max(116,Math.min(320,frameHeight*.36,frameWidth*.53))*(.86+Math.random()*.24)});
+ if(footageEffects.length>8)footageEffects.shift();
+}
+function drawFootage(dt){
+ ctx.globalCompositeOperation='source-over';
+ footageEffects=footageEffects.filter(effect=>{
+  effect.age+=dt;
+  const duration=footage.frames/footage.fps;
+  if(effect.age>=duration)return false;
+  const age=effect.age/duration;
+  const intro=Math.min(1,effect.age/.45),outro=Math.min(1,(duration-effect.age)/.86);
+  const width=effect.size*(.48+.67*Math.min(1,age*2.2));
+  const height=width*footage.height/footage.width;
+  const index=effect.clip*footage.frames+Math.floor(effect.age*footage.fps);
+  ctx.save();
+  ctx.translate(effect.x+effect.horizontal*age*18,effect.y-age*31);
+  ctx.scale(effect.horizontal,1);ctx.rotate(effect.angle);
+  ctx.globalAlpha=Math.min(1,intro*outro*effect.brightness);
+  ctx.drawImage(footageAtlas,index%footage.columns*footage.width,Math.floor(index/footage.columns)*footage.height,
+   footage.width,footage.height,-width*.43,-height,width,height);
+  ctx.restore();
+  if(intro<1){
+   const glow=2.3+intro*4.8;
+   ctx.globalAlpha=(1-intro)*.74;
+   ctx.drawImage(sprites[1],effect.x-glow,effect.y-glow,glow*2,glow*2);
+  }
+  return true;
+ });
+ ctx.globalAlpha=1;
+}
 function sizeSmoke(){
  const cell=Math.max(2.5,Math.max(frameWidth,frameHeight)/200);
  smokeCanvas.width=Math.max(1,Math.ceil(frameWidth/cell));
@@ -186,10 +252,11 @@ function sizeSmoke(){
  clearSmoke();
 }
 function clearSmoke(){
- smoke=[];flowTurn=0;
+ smoke=[];flowTurn=0;footageEffects=[];footageTurn=0;
  for(const flow of flows){flow.last=-Infinity;flow.density.fill(0);flow.scratch.fill(0);}
 }
 function releaseSmoke(point,dx){
+ if(footageReady){addFootage(point,dx);return;}
  const x=point.x/frameWidth*smokeCanvas.width,y=point.y/frameHeight*smokeCanvas.height;
  const nearby=smoke.find(source=>source.age<.65&&Math.hypot(source.x-x,source.y-y)<3.5);
  if(nearby){
@@ -286,6 +353,34 @@ canvas.onpointerdown=event=>{
 canvas.onpointermove=event=>{if(mouseDown)touchPoint(pointAt(event),null,performance.now());};
 canvas.onpointerup=canvas.onpointercancel=canvas.onlostpointercapture=()=>{mouseDown=false;};
 
+const fingerChains=[[0,1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,16],[17,18,19,20]];
+function drawHandSplat(x,y,rx,ry,angle,opacity){
+ ctx.save();ctx.translate(x,y);ctx.rotate(angle);
+ ctx.globalAlpha=opacity;
+ ctx.drawImage(sprites[2],-rx,-ry,rx*2,ry*2);
+ ctx.restore();
+}
+function drawHand(){
+ if(handCloud.length<21)return;
+ const wrist=handCloud[0],index=handCloud[5],little=handCloud[17],middle=handCloud[9];
+ const palmWidth=Math.max(12,Math.hypot(index.x-little.x,index.y-little.y));
+ const palmLength=Math.max(14,Math.hypot(wrist.x-middle.x,wrist.y-middle.y));
+ const palmAngle=Math.atan2(middle.y-wrist.y,middle.x-wrist.x);
+ ctx.globalCompositeOperation='lighter';
+ drawHandSplat(wrist.x+(middle.x-wrist.x)*.5,wrist.y+(middle.y-wrist.y)*.5,palmLength*.72,palmWidth*.65,palmAngle,.36);
+ drawHandSplat(wrist.x+(middle.x-wrist.x)*.76,wrist.y+(middle.y-wrist.y)*.76,palmLength*.42,palmWidth*.63,palmAngle,.21);
+ for(const chain of fingerChains){
+  for(let i=1;i<chain.length;i++){
+   const a=handCloud[chain[i-1]],b=handCloud[chain[i]];
+   const dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy);
+   const width=Math.max(2.7,palmWidth*(.132-i*.016));
+   drawHandSplat((a.x+b.x)/2,(a.y+b.y)/2,length*.67+width*.42,width,Math.atan2(dy,dx),.61);
+  }
+  const tip=handCloud[chain.at(-1)],width=Math.max(2.2,palmWidth*.047);
+  drawHandSplat(tip.x,tip.y,width,width,0,.66);
+ }
+ ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+}
 function render(t){
  const dt=Math.min(.05,(t-lastFrame)/1000||0);lastFrame=t;
  track(t);
@@ -302,16 +397,9 @@ function render(t){
   ctx.fillStyle=faceColor;ctx.fillRect(point.x-.55,point.y-.55,1.1,1.1);
  }
  drawSmoke(dt);
+ drawFootage(dt);
  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
- for(let i=0;i<handCloud.length;i++){
-  const point=handCloud[i],tip=i>0&&i%4===0;
-  const radius=tip?6:4;
-  ctx.globalAlpha=tip?.95:.76;
-  ctx.drawImage(sprites[2],point.x-radius,point.y-radius,radius*2,radius*2);
-  ctx.fillStyle='#a8f3e6';
-  ctx.fillRect(point.x-1.25,point.y-1.25,2.5,2.5);
- }
- ctx.globalAlpha=1;
+ drawHand();
  requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
