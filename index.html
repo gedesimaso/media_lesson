@@ -1,7 +1,7 @@
 <!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>손끝의 모래 · 샌드아트</title>
 <style>*{box-sizing:border-box}body{margin:0;background:#29241d;color:#f4e4c6;font:15px system-ui}header{padding:20px;display:flex;gap:14px;flex-wrap:wrap;align-items:center}h1{font-size:20px;margin:0}button,label{background:#493b2c;border:1px solid #806848;border-radius:8px;padding:10px;color:inherit}button{font:inherit;cursor:pointer}input{max-width:180px}main{position:relative}canvas{width:100%;height:65vh;min-height:380px;display:block;touch-action:none}p{margin:12px 20px;line-height:1.6}#preview{width:120px;height:145px;object-fit:cover;border:2px solid #a2edc7;border-radius:50%;background:#16372e}aside{display:flex;align-items:center;gap:12px;padding:12px 20px;flex-wrap:wrap}aside>div{flex:1;min-width:220px}aside label{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0}#preview{flex-shrink:0;min-height:0;transform:none}small{display:block;color:#abd2c2}button:disabled{opacity:.5}select{font:inherit;max-width:100%}#handPreview{width:min(320px,100%);height:auto;min-height:0;background:#0b1e18}</style>
 <header><h1>손끝의 모래 · 샌드아트</h1><button id="start">웹캠 켜기</button><button id="stop" disabled>웹캠 끄기</button><button id="clearSand">모래 고르기</button><label>입력 <select id="inputMode"><option value="hand">손 인식</option><option value="mouse">마우스 테스트</option></select></label><span>검지만 펴기: 그리기 · 손끝 모으기: 모래 쓸기</span><select id="drawMode" hidden><option value="index">검지만 펴기</option></select><label><input id="showSkeleton" type="checkbox" checked> 손 스켈레톤 보기</label></header>
-<p id="status" role="status">검지만 펴면 그려지고, 다른 손 모양에서는 멈춥니다. 다섯 손끝을 모아 움직이면 모래를 쓸어 모읍니다.</p><p id="handStatus" role="status">손 인식 대기 중</p>
+<p id="status" role="status">검지만 펴면 그려지고, 다른 손 모양에서는 멈춥니다. 손끝을 모아 모래를 밀거나, 두 손을 모아 글씨를 덮고 더미를 쌓아보세요.</p><p id="handStatus" role="status">손 인식 대기 중</p>
 <main><canvas id="scene" aria-label="검지로 모래를 밀어 그림을 그리는 모래판"></canvas></main>
 <aside><canvas id="handPreview" width="320" height="180" aria-label="거울 방향 웹캠 영상과 손 스켈레톤"></canvas><video id="camera" autoplay muted playsinline hidden></video><canvas id="preview" width="240" height="290" aria-label="요정에 들어가는 확대된 얼굴 미리보기"></canvas><div><span id="tracking" role="status">웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.</span><br><label>얼굴 확대 <input id="faceZoom" type="range" min="0.8" max="3" step="0.05" value="1"><output id="zoomValue">1.00배</output></label><small>자동 인식 준비에는 인터넷 연결이 필요합니다.<br>웹캠 영상은 기기 안에서 처리하며 업로드·녹화하지 않습니다.</small></div></aside>
 <script>
@@ -53,14 +53,15 @@ const inputMode=document.getElementById('inputMode'),drawMode=document.getElemen
 let handDetector=null,handLoading=null,handFailed=false,lastHandDetect=-Infinity,lastHandVideo=-1,handPoints=null,handPointer=null,pinching=false;
 const HAND_LINKS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[0,17],[17,18],[18,19],[19,20]];
 let gestureCandidate="idle",gestureCount=0,handAction="idle",sweepPrevious=null;
-function resetHand(){handAction="idle";gestureCandidate="idle";gestureCount=0;sweepPrevious=null;endStroke();handPoints=null;handPointer=null;pinching=false;lastHandVideo=-1;lastHandDetect=-Infinity;}
+let previousPair=null,secondHand=null;
+function resetHand(){previousPair=null;secondHand=null;handAction="idle";gestureCandidate="idle";gestureCount=0;sweepPrevious=null;endStroke();handPoints=null;handPointer=null;pinching=false;lastHandVideo=-1;lastHandDetect=-Infinity;}
 inputMode.onchange=()=>{resetHand();status.textContent=inputMode.value==='hand'?'검지만 펴서 그리거나 손끝을 모아 모래를 쓸어보세요.':'마우스 버튼을 누른 채 모래를 그려보세요.';if(stream&&inputMode.value==='hand')void prepareHandDetector();};
 drawMode.onchange=resetHand;
 async function prepareHandDetector(){
  if(handDetector){handFailed=false;return handDetector;}
  if(handLoading)return handLoading;
  handStatus.textContent='손 인식 모델을 불러오고 있어요…';
- handLoading=(async()=>{const {HandLandmarker,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');handDetector=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},runningMode:'VIDEO',numHands:1,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});handFailed=false;if(stream)handStatus.textContent='준비됐어요. 카메라에 손바닥과 손가락을 보여주세요.';return handDetector;})().catch(e=>{handLoading=null;handFailed=true;if(stream)handStatus.textContent='손 인식을 불러오지 못했어요. 인터넷·카메라 권한을 확인하고 웹캠을 다시 켜주세요. 마우스 테스트도 선택할 수 있어요.';return null;});return handLoading;
+ handLoading=(async()=>{const {HandLandmarker,FilesetResolver}=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/vision_bundle.mjs');const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm');handDetector=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},runningMode:'VIDEO',numHands:2,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.5});handFailed=false;if(stream)handStatus.textContent='준비됐어요. 카메라에 손바닥과 손가락을 보여주세요.';return handDetector;})().catch(e=>{handLoading=null;handFailed=true;if(stream)handStatus.textContent='손 인식을 불러오지 못했어요. 인터넷·카메라 권한을 확인하고 웹캠을 다시 켜주세요. 마우스 테스트도 선택할 수 있어요.';return null;});return handLoading;
 }
 function pixelDistance(a,b){return Math.hypot((a.x-b.x)*v.videoWidth,(a.y-b.y)*v.videoHeight);}
 function classifyHand(points){
@@ -74,6 +75,32 @@ function classifyHand(points){
  if(gathered)return {action:'sweep',point:center};
  const thumbOut=dist(points[4],points[5])>palm*.85;
  return {action:fingers[0]&&!fingers[1]&&!fingers[2]&&!fingers[3]&&!thumbOut?'draw':'idle',point:points[8]};
+}
+function processHands(hands){
+ if(hands.length<2){
+  if(previousPair)resetHand();
+  processHand(hands[0]||null);
+  return;
+ }
+ if(!previousPair)resetHand();
+ handPoints=hands[0];secondHand=hands[1];handPointer=null;
+ const pair=hands.map(points=>{
+  // Follow the working edge between the knuckles and fingertips.
+  const edge=[5,9,13,17,8,12,16,20].map(i=>points[i]);
+  return {x:w*(1-edge.reduce((sum,p)=>sum+p.x,0)/edge.length),
+          y:h*edge.reduce((sum,p)=>sum+p.y,0)/edge.length};
+ }).sort((a,b)=>a.x-b.x);
+ if(previousPair){
+  const gap=pair[1].x-pair[0].x;
+  const oldGap=previousPair[1].x-previousPair[0].x;
+  const close=Math.hypot(gap,pair[1].y-pair[0].y)<Math.min(w,h)*.68;
+  if(close&&oldGap-gap>1&&Math.abs(pair[1].y-pair[0].y)<Math.min(w,h)*.28){
+   const center={x:(pair[0].x+pair[1].x)/2,y:(pair[0].y+pair[1].y)/2};
+   for(let i=0;i<2;i++)sweepSand(previousPair[i],pair[i],center);
+  }
+ }
+ previousPair=pair;
+ handStatus.textContent='두 손을 모아 쓸면 글씨가 덮이고 가운데 모래가 쌓여요.';
 }
 function processHand(points){
  if(inputMode.value!=='hand')return;
@@ -92,13 +119,13 @@ function processHand(points){
 }
 function updateHand(t){
  if(!stream||v.readyState<2||inputMode.value!=='hand')return;
- if(handDetector&&!handFailed&&t-lastHandDetect>=50&&v.currentTime!==lastHandVideo){lastHandDetect=t;lastHandVideo=v.currentTime;try{const result=handDetector.detectForVideo(v,t);processHand(result.landmarks[0]||null);}catch(e){handFailed=true;resetHand();handStatus.textContent='손 인식이 멈췄어요. 웹캠을 껐다가 다시 켜주세요.';}}
+ if(handDetector&&!handFailed&&t-lastHandDetect>=50&&v.currentTime!==lastHandVideo){lastHandDetect=t;lastHandVideo=v.currentTime;try{const result=handDetector.detectForVideo(v,t);processHands(result.landmarks);}catch(e){handFailed=true;resetHand();handStatus.textContent='손 인식이 멈췄어요. 웹캠을 껐다가 다시 켜주세요.';}}
 }
 function renderHandPreview(){
  hg.clearRect(0,0,handPreview.width,handPreview.height);
  if(!stream||v.readyState<2)return;
  hg.save();hg.translate(handPreview.width,0);hg.scale(-1,1);hg.drawImage(v,0,0,handPreview.width,handPreview.height);hg.restore();
- if(showSkeleton.checked&&handPoints){hg.strokeStyle='#7df3b7';hg.lineWidth=2;for(const [a,b] of HAND_LINKS){hg.beginPath();hg.moveTo((1-handPoints[a].x)*320,handPoints[a].y*180);hg.lineTo((1-handPoints[b].x)*320,handPoints[b].y*180);hg.stroke();}for(let i=0;i<handPoints.length;i++){const p=handPoints[i];hg.fillStyle=i===8?'#ffce70':'#bcffe0';hg.beginPath();hg.arc((1-p.x)*320,p.y*180,i===8?5:2.5,0,Math.PI*2);hg.fill();}}
+ if(showSkeleton.checked&&handPoints)for(const previewPoints of [handPoints,...(secondHand?[secondHand]:[])]){hg.strokeStyle='#7df3b7';hg.lineWidth=2;for(const [a,b] of HAND_LINKS){hg.beginPath();hg.moveTo((1-previewPoints[a].x)*320,previewPoints[a].y*180);hg.lineTo((1-previewPoints[b].x)*320,previewPoints[b].y*180);hg.stroke();}for(let i=0;i<previewPoints.length;i++){const p=previewPoints[i];hg.fillStyle=i===8?'#ffce70':'#bcffe0';hg.beginPath();hg.arc((1-p.x)*320,p.y*180,i===8?5:2.5,0,Math.PI*2);hg.fill();}}
 }
 function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.save();g.strokeStyle=drawing?'#ffd18b':'#b4ead4';g.lineWidth=2;g.beginPath();g.arc(handPointer.x,handPointer.y,handAction==='sweep'?32:drawing?7:11,0,Math.PI*2);g.stroke();g.restore();}
 
@@ -106,10 +133,10 @@ function drawHandCursor(){if(inputMode.value!=='hand'||!handPointer)return;g.sav
 const sand=document.createElement('canvas'),sg=sand.getContext('2d');
 const photoBase=document.createElement('canvas'),photoContext=photoBase.getContext('2d'),sandPhoto=new Image();
 let photoReady=false,sandHasMarks=false;
-// Generated with Higgsfield, 2026-11-11. Procedural texture remains a loading/offline fallback.
+// ImageGen beach sand plate, with a neutral fallback while loading.
 sandPhoto.onload=()=>{photoReady=true;if(!sandHasMarks)fillSand();};
 sandPhoto.onerror=()=>{photoReady=false;};
-sandPhoto.src='https://d8j0ntlcm91z4.cloudfront.net/user_3LrYXvyCUCXtXE68Fc0ZO9s8Jx5/hf_20261111_055004_c8048d8f-e481-4524-8d87-6335a0bf10c8.png';
+sandPhoto.src='./white-beach-sand.jpg';
 let previous=null,grains=[],lastFrame=0,seed=12345;
 
 // Locally synthesized dry sand friction: filtered, softly modulated noise.
@@ -156,35 +183,53 @@ function rubSand(distance){
 document.addEventListener('visibilitychange',()=>{if(document.hidden)resetHand();});
 
 function random(){seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296;}
+const bed=document.createElement('canvas'),bedContext=bed.getContext('2d');
+const refillStamp=document.createElement('canvas'),refillContext=refillStamp.getContext('2d');
+function cacheBed(){
+ bed.width=sand.width;bed.height=sand.height;
+ bedContext.filter='brightness(.79) saturate(.76)';
+ bedContext.drawImage(photoBase,0,0);
+}
 function fillSand(){
  sandHasMarks=false;
+ sg.clearRect(0,0,sand.width,sand.height);
+ photoBase.width=sand.width;photoBase.height=sand.height;
  if(photoReady){
-  photoBase.width=sand.width;photoBase.height=sand.height;
   const scale=Math.max(sand.width/sandPhoto.naturalWidth,sand.height/sandPhoto.naturalHeight);
   photoContext.drawImage(sandPhoto,(sand.width-sandPhoto.naturalWidth*scale)/2,(sand.height-sandPhoto.naturalHeight*scale)/2,sandPhoto.naturalWidth*scale,sandPhoto.naturalHeight*scale);
-  sg.drawImage(photoBase,0,0);return;
+  sg.drawImage(photoBase,0,0);cacheBed();return;
  }
  seed=12345;const image=sg.createImageData(sand.width,sand.height);
  for(let y=0;y<sand.height;y++)for(let x=0;x<sand.width;x++){
   const i=(y*sand.width+x)*4,noise=(random()-.5)*31;
   const ripple=Math.sin(y*.048+Math.sin(x*.007)*2.4)*2.8;
   const light=9*(1-x/sand.width)-10*y/sand.height+ripple+noise;
-  image.data[i]=196+light;image.data[i+1]=163+light;image.data[i+2]=111+light;image.data[i+3]=255;
- }sg.putImageData(image,0,0);
+  image.data[i]=218+light;image.data[i+1]=209+light;image.data[i+2]=191+light;image.data[i+3]=255;
+ }photoContext.putImageData(image,0,0);sg.drawImage(photoBase,0,0);cacheBed();
 }
 
 const pileLayer=document.createElement('canvas'),pileContext=pileLayer.getContext('2d');
 let mass=null,massCols=0,massRows=0,massDirty=true;const cell=10;
 function resetMass(){massCols=Math.ceil(w/cell);massRows=Math.ceil(h/cell);mass=new Float32Array(massCols*massRows).fill(1);pileLayer.width=massCols;pileLayer.height=massRows;massDirty=true;}
-function sweepSand(from,to){
+function sweepSand(from,to,gatherCenter){
  const dx=to.x-from.x,dy=to.y-from.y,d=Math.hypot(dx,dy);if(d<2||d>100)return;
  sandHasMarks=true;rubSand(d);const steps=Math.ceil(d/5),ux=dx/d,uy=dy/d;
  for(let step=1;step<=steps;step++){
-  const cx=(from.x+dx*step/steps)/cell,cy=(from.y+dy*step/steps)/cell,delta=new Float32Array(mass.length);
+  const x=from.x+dx*step/steps,y=from.y+dy*step/steps;
+  refillSand(x,y,28);
+  const cx=x/cell,cy=y/cell,delta=new Float32Array(mass.length);
   for(let gy=Math.max(1,Math.floor(cy-4));gy<Math.min(massRows-1,cy+4);gy++)for(let gx=Math.max(1,Math.floor(cx-4));gx<Math.min(massCols-1,cx+4);gx++){
    const rx=gx-cx,ry=gy-cy,r=Math.hypot(rx,ry);if(r>3.5)continue;
    const source=gy*massCols+gx,side=rx*(-uy)+ry*ux;
-   const tx=Math.max(0,Math.min(massCols-1,Math.round(gx+ux*1.4+uy*side*.28))),ty=Math.max(0,Math.min(massRows-1,Math.round(gy+uy*1.4-ux*side*.28))),target=ty*massCols+tx;
+   let pushX=ux*1.4+uy*side*.28,pushY=uy*1.4-ux*side*.28;
+   if(gatherCenter){
+    const mx=gatherCenter.x/cell-gx,my=gatherCenter.y/cell-gy;
+    const reach=Math.max(1,Math.hypot(mx,my)/3);
+    pushX=mx/reach;pushY=my/reach;
+   }
+   const tx=Math.max(0,Math.min(massCols-1,Math.round(gx+pushX)));
+   const ty=Math.max(0,Math.min(massRows-1,Math.round(gy+pushY)));
+   const target=ty*massCols+tx;
    const amount=mass[source]*.16*(1-r/3.5);delta[source]-=amount;delta[target]+=amount;
   }
   for(let i=0;i<mass.length;i++)mass[i]+=delta[i];
@@ -198,28 +243,38 @@ function drawPiles(){
  if(massDirty){const image=pileContext.createImageData(massCols,massRows);for(let y=0;y<massRows;y++)for(let x=0;x<massCols;x++){
   const i=y*massCols+x,value=mass[i],slope=(mass[i-1]||value)-(mass[i+1]||value)+(mass[i-massCols]||value)-(mass[i+massCols]||value);
   const dark=value<1||slope<0,alpha=Math.min(.75,Math.abs(value-1)*.28+Math.abs(slope)*.16),k=i*4;
-  image.data[k]=dark?105:255;image.data[k+1]=dark?67:226;image.data[k+2]=dark?29:165;image.data[k+3]=alpha*255;
- }pileContext.putImageData(image,0,0);massDirty=false;}g.drawImage(pileLayer,0,0,w,h);
+  image.data[k]=dark?112:255;image.data[k+1]=dark?102:247;image.data[k+2]=dark?87:227;image.data[k+3]=alpha*255;
+ }pileContext.putImageData(image,0,0);massDirty=false;}g.save();g.globalCompositeOperation='soft-light';g.drawImage(pileLayer,0,0,w,h);g.restore();
 }
 
 function size(){
  const hadMarks=sandHasMarks;const old=document.createElement('canvas');old.width=sand.width;old.height=sand.height;old.getContext('2d').drawImage(sand,0,0);
  const r=c.getBoundingClientRect(),d=Math.min(devicePixelRatio||1,2);w=r.width;h=r.height;c.width=Math.round(w*d);c.height=Math.round(h*d);g.setTransform(d,0,0,d,0,0);
- sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(hadMarks&&old.width&&old.height){sg.drawImage(old,0,0,w,h);sandHasMarks=true;}endStroke();grains=[];resetMass();
+ sand.width=Math.ceil(w);sand.height=Math.ceil(h);fillSand();if(hadMarks&&old.width&&old.height){sg.clearRect(0,0,sand.width,sand.height);sg.drawImage(old,0,0,w,h);sandHasMarks=true;}endStroke();grains=[];resetMass();
 }
 new ResizeObserver(size).observe(c);size();
 function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
+function refillSand(x,y,radius){
+ const side=radius*2;
+ refillStamp.width=side;refillStamp.height=side;
+ refillContext.drawImage(photoBase,radius-x,radius-y);
+ refillContext.globalCompositeOperation='destination-in';
+ const edge=refillContext.createRadialGradient(radius,radius,radius*.55,radius,radius,radius);
+ edge.addColorStop(0,'#fff');edge.addColorStop(1,'rgba(255,255,255,0)');
+ refillContext.fillStyle=edge;refillContext.fillRect(0,0,side,side);
+ sg.drawImage(refillStamp,x-radius,y-radius);
+}
 function furrow(p){
  sandHasMarks=true;
- const radius=10;
- const relief=sg.createRadialGradient(p.x-2,p.y-2,0,p.x,p.y,radius);
- relief.addColorStop(0,'#9e703b');relief.addColorStop(.42,'#b58040');relief.addColorStop(.67,'#c69752');relief.addColorStop(.84,'#f0cf8a');relief.addColorStop(1,'rgba(208,178,126,0)');
- sg.fillStyle=relief;sg.fillRect(p.x-radius,p.y-radius,radius*2,radius*2);
- if(photoReady&&photoBase.width){
-  sg.save();sg.beginPath();sg.arc(p.x,p.y,radius*.9,0,Math.PI*2);sg.clip();
-  sg.globalCompositeOperation='soft-light';sg.globalAlpha=.85;
-  sg.drawImage(photoBase,p.x-radius,p.y-radius,radius*2,radius*2,p.x-radius,p.y-radius,radius*2,radius*2);sg.restore();
- }
+ const radius=9;
+ const edge=sg.createRadialGradient(p.x,p.y,radius*.48,p.x,p.y,radius);
+ edge.addColorStop(0,'#000');edge.addColorStop(.75,'rgba(0,0,0,.42)');
+ edge.addColorStop(1,'rgba(0,0,0,0)');
+ sg.save();
+ sg.globalCompositeOperation='destination-out';
+ sg.fillStyle=edge;
+ sg.fillRect(p.x-radius,p.y-radius,radius*2,radius*2);
+ sg.restore();
 }
 function beginStroke(p){lastRubTime=0;drawing=true;previous={...p};furrow(p);}
 function endStroke(){drawing=false;previous=null;hushSand();}
@@ -234,7 +289,7 @@ function drawSample(p){
   const q={x:previous.x+dx*i/steps,y:previous.y+dy*i/steps};furrow(q);
   for(const side of [-1,1]){
    const offset=8+Math.random()*7,gx=q.x+nx*offset*side,gy=q.y+ny*offset*side;
-   sg.fillStyle=Math.random()<.5?'#f2d28b':'#b28542';sg.fillRect(gx,gy,.7+Math.random(),.7+Math.random());
+   sg.fillStyle=Math.random()<.5?'#f2e9d7':'#bfb19a';sg.fillRect(gx,gy,.7+Math.random(),.7+Math.random());
    if(i%3===0)grains.push({x:gx,y:gy,vx:nx*side*(12+Math.random()*35),vy:ny*side*(12+Math.random()*35)-12,life:0,ttl:.25+Math.random()*.3});
   }
  }previous={...p};if(grains.length>700)grains.splice(0,grains.length-700);
@@ -250,9 +305,11 @@ function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.s
 
 function frame(t){
  updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
+ // The exposed bed is compact sand, lit less strongly than the loose top grains.
+ g.drawImage(bed,0,0,w,h);
  g.drawImage(sand,0,0,w,h);drawPiles();
- for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#f3d695';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
- const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(44,27,8,.24)');g.fillStyle=shade;g.fillRect(0,0,w,h);
+ for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#eee4d0';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
+ const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(50,44,36,.13)');g.fillStyle=shade;g.fillRect(0,0,w,h);
  drawHandCursor();requestAnimationFrame(frame);
 }requestAnimationFrame(frame);
 })();
