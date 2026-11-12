@@ -36,10 +36,8 @@ let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
 const faceLight=[151,205,246];
 const faceColor='#'+faceLight.map(channel=>channel.toString(16).padStart(2,'0')).join('');
-let dissolving=[];
 const smokeCanvas=document.createElement('canvas'),smokeContext=smokeCanvas.getContext('2d');
-let smokeGrid,smokeScratch,smokeImage,flowTime=0,smokeAlive=false,smokeUntil=0;
-let windPhase=0;
+let smokeImage,flows=[],flowTime=0,flowTurn=0;
 const sprites=['#527ff1',faceColor,'#ceeeff'].map(color=>{
  const sprite=document.createElement('canvas');
  sprite.width=sprite.height=64;
@@ -177,118 +175,99 @@ function touchPaths(paths,t,radius){
  return true;
 }
 function sizeSmoke(){
- const cell=Math.max(2.3,Math.max(frameWidth,frameHeight)/280);
+ const cell=Math.max(2.5,Math.max(frameWidth,frameHeight)/200);
  smokeCanvas.width=Math.max(1,Math.ceil(frameWidth/cell));
  smokeCanvas.height=Math.max(1,Math.ceil(frameHeight/cell));
  smokeImage=smokeContext.createImageData(smokeCanvas.width,smokeCanvas.height);
- smokeGrid=new Float32Array(smokeCanvas.width*smokeCanvas.height);
- smokeScratch=new Float32Array(smokeGrid.length);
+ const count=smokeCanvas.width*smokeCanvas.height;
+ flows=Array.from({length:3},()=>({
+  density:new Float32Array(count),scratch:new Float32Array(count),last:-Infinity
+ }));
  clearSmoke();
 }
 function clearSmoke(){
- smoke=[];dissolving=[];smokeAlive=false;smokeUntil=0;
- smokeGrid?.fill(0);smokeScratch?.fill(0);
+ smoke=[];flowTurn=0;
+ for(const flow of flows){flow.last=-Infinity;flow.density.fill(0);flow.scratch.fill(0);}
 }
 function releaseSmoke(point,dx){
- const direction=Math.max(-24,Math.min(24,dx*1.1));
- const grains=Array.from({length:10},(_,i)=>{
-  const angle=(i+Math.random()*.7)*Math.PI/5;
-  const speed=15+Math.random()*33;
-  return {x:point.x,y:point.y,vx:Math.cos(angle)*speed+direction,vy:Math.sin(angle)*speed-18,
-   size:.65+Math.random()*.9};
- });
- dissolving.push({grains,age:0,direction});
- if(dissolving.length>36)dissolving.shift();
-}
-function drawDissolving(dt){
- const drag=Math.exp(-dt*4);
- dissolving=dissolving.filter(burst=>{
-  const previousAge=burst.age;
-  burst.age+=dt;
-  for(const grain of burst.grains){
-   grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;
-   grain.vx*=drag;grain.vy=grain.vy*drag-dt*43;
-  }
-  if(previousAge<.20&&burst.age>=.20){
-   const centroid=burst.grains.reduce((sum,grain)=>({x:sum.x+grain.x,y:sum.y+grain.y}),{x:0,y:0});
-   startPlume({x:centroid.x/burst.grains.length,y:centroid.y/burst.grains.length},burst.direction);
-  }
-  if(burst.age>=.43)return false;
-  ctx.globalAlpha=.92*(1-Math.max(0,(burst.age-.10)/.33));
-  ctx.fillStyle=faceColor;
-  for(const grain of burst.grains){
-   const glow=grain.size*2.6;
-   ctx.drawImage(sprites[1],grain.x-glow,grain.y-glow,glow*2,glow*2);
-   ctx.fillRect(grain.x-grain.size*.5,grain.y-grain.size*.5,grain.size,grain.size);
-  }
-  return true;
- });
- ctx.globalAlpha=1;
-}
-function startPlume(point,dx){
  const x=point.x/frameWidth*smokeCanvas.width,y=point.y/frameHeight*smokeCanvas.height;
- const nearby=smoke.find(source=>source.remaining>.08&&Math.hypot(source.x-x,source.y-y)<5);
+ const nearby=smoke.find(source=>source.age<.65&&Math.hypot(source.x-x,source.y-y)<3.5);
  if(nearby){
-  nearby.remaining=Math.max(nearby.remaining,1.35);
-  nearby.intensity=Math.min(1.55,nearby.intensity+.18);
+  nearby.duration=Math.min(1.2,Math.max(nearby.duration,nearby.age+.5));
+  nearby.intensity=Math.min(1.35,nearby.intensity+.12);
   return;
  }
- smoke.push({x,y,remaining:1.35+Math.random()*.75,intensity:1.05,phase:Math.random()*Math.PI*2,pulse:2+Math.random()*3,drift:Math.max(-.45,Math.min(.45,dx*.018))});
- if(smoke.length>14)smoke.shift();
- if(!smokeAlive)windPhase=Math.random()*Math.PI*2;
- smokeAlive=true;
- smokeUntil=flowTime+9;
+ const direction=flowTurn++%3;
+ const flow=flows[direction];
+ if(flowTime-flow.last>2.2){
+  const angles=[Math.PI,0,-Math.PI/2];
+  const angle=angles[direction]+(Math.random()-.5)*.62+Math.max(-.12,Math.min(.12,dx*.004));
+  flow.vx=Math.cos(angle)*.19;flow.vy=Math.sin(angle)*.19;
+  flow.phase=Math.random()*Math.PI*2;
+ }
+ flow.last=flowTime;
+ smoke.push({x,y,age:0,duration:.65+Math.random()*.38,intensity:.92,flow});
+ if(smoke.length>20)smoke.shift();
 }
-function sampleSmoke(x,y,cols,rows){
- const x0=Math.floor(x),y0=Math.floor(y),fx=x-x0,fy=y-y0;
- const at=(i,j)=>i>=0&&j>=0&&i<cols&&j<rows?smokeGrid[j*cols+i]:0;
- return (at(x0,y0)*(1-fx)+at(x0+1,y0)*fx)*(1-fy)
-       +(at(x0,y0+1)*(1-fx)+at(x0+1,y0+1)*fx)*fy;
+function sampleSmoke(grid,x,y,cols,rows){
+ if(x<0||y<0||x>=cols-1||y>=rows-1)return 0;
+ const x0=Math.floor(x),y0=Math.floor(y),fx=x-x0,fy=y-y0,i=y0*cols+x0;
+ return (grid[i]*(1-fx)+grid[i+1]*fx)*(1-fy)+(grid[i+cols]*(1-fx)+grid[i+cols+1]*fx)*fy;
 }
 function drawSmoke(dt){
- if(!smokeAlive||dt<=0)return;
+ if(dt<=0)return;
  flowTime+=dt;
- if(flowTime>smokeUntil){clearSmoke();return;}
- const cols=smokeCanvas.width,rows=smokeCanvas.height;
- const t=flowTime,buoyancy=rows*.225;
- // Moving eddies alternately spread and pinch the smoke, with local pockets of dissipation.
- for(let y=0;y<rows;y++){
-  const py=y/rows;
-  const broad=Math.sin(py*12+t*.79+windPhase);
-  const fine=Math.sin(py*29-t*1.18-windPhase);
-  for(let x=0;x<cols;x++){
-   const px=x/cols;
-   const eddy=px*15+py*19+t*.73+windPhase;
-   const squeeze=px*31-py*27-t*.57+windPhase*.61;
-   const pocket=Math.sin(px*22+py*34-t*.92-windPhase)*Math.sin(px*17-py*24+t*1.27);
-   const vx=cols*(.073*broad+.028*fine+.074*Math.sin(eddy)+.038*Math.sin(squeeze));
-   const vy=-buoyancy+rows*(.056*Math.cos(eddy)-.037*Math.cos(squeeze));
-   const loss=.48+1.65*Math.max(0,pocket)**2;
-   smokeScratch[y*cols+x]=sampleSmoke(x-vx*dt,y-vy*dt,cols,rows)*(1-dt*loss);
-  }
+ const active=flows.filter(flow=>flowTime-flow.last<5);
+ for(const flow of flows){
+  if(flowTime-flow.last>=5&&flow.last!==-Infinity){flow.last=-Infinity;flow.density.fill(0);}
  }
- [smokeGrid,smokeScratch]=[smokeScratch,smokeGrid];
- smoke=smoke.filter(source=>{
-  source.remaining-=dt;
-  if(source.remaining<=0)return false;
-  const x=source.x+Math.sin(t*1.7+source.phase)*.22+source.drift;
-  const y=source.y-.6;
-  const pulse=.86+.14*Math.sin(t*source.pulse+source.phase);
-  const strength=dt*31*source.intensity*pulse*Math.min(1,source.remaining*4);
-  for(let j=Math.max(0,Math.floor(y-3));j<=Math.min(rows-1,Math.ceil(y+3));j++){
-   for(let i=Math.max(0,Math.floor(x-3));i<=Math.min(cols-1,Math.ceil(x+3));i++){
-    const radius=(i-x)**2+(j-y)**2;
-    const index=j*cols+i;
-    smokeGrid[index]=Math.min(1.6,smokeGrid[index]+strength*Math.exp(-radius*2.65));
+ if(!active.length)return;
+ const cols=smokeCanvas.width,rows=smokeCanvas.height,t=flowTime;
+ for(const flow of active){
+  const idle=t-flow.last;
+  const coast=Math.max(.12,1-idle/2.65);
+  const opacityLoss=idle<1?.65:1.18;
+  for(let y=0;y<rows;y++){
+   const py=y/rows,fold=py*16+t*.86+flow.phase;
+   for(let x=0;x<cols;x++){
+    const px=x/cols,eddy=px*19+py*17-t*.72+flow.phase;
+    const curl=px*31-py*26+t*1.12+flow.phase*.52;
+    const vx=cols*(flow.vx*coast+.072*Math.sin(fold)+.057*Math.sin(eddy)+.022*Math.sin(curl));
+    const vy=rows*(flow.vy*coast-.025+.048*Math.cos(eddy)-.036*Math.cos(curl));
+    const thinning=Math.max(0,Math.sin(eddy*.82)*Math.cos(curl*.65));
+    flow.scratch[y*cols+x]=sampleSmoke(flow.density,x-vx*dt,y-vy*dt,cols,rows)*(1-dt*(opacityLoss+thinning*.94));
    }
+  }
+  [flow.density,flow.scratch]=[flow.scratch,flow.density];
+ }
+ smoke=smoke.filter(source=>{
+  source.age+=dt;
+  if(source.age>=source.duration)return false;
+  // A single luminous dot softens into a growing patch of the same color.
+  const opening=Math.min(1,source.age/.26);
+  const radius=.43+opening*1.22;
+  const strength=dt*22*source.intensity*Math.min(1,(source.duration-source.age)*5);
+  for(let j=Math.max(0,Math.floor(source.y-5));j<=Math.min(rows-1,Math.ceil(source.y+5));j++){
+   for(let i=Math.max(0,Math.floor(source.x-5));i<=Math.min(cols-1,Math.ceil(source.x+5));i++){
+    const distance=(i-source.x)**2+(j-source.y)**2;
+    const index=j*cols+i;
+    source.flow.density[index]=Math.min(1.65,source.flow.density[index]+strength*Math.exp(-distance/(radius*radius)));
+   }
+  }
+  if(source.age<.25){
+   const glow=2.4+opening*4;
+   const x=source.x/cols*frameWidth,y=source.y/rows*frameHeight;
+   ctx.globalCompositeOperation='lighter';ctx.globalAlpha=(1-opening)*.72;
+   ctx.drawImage(sprites[1],x-glow,y-glow,glow*2,glow*2);
   }
   return true;
  });
  const pixels=smokeImage.data;
- for(let i=0;i<smokeGrid.length;i++){
-  const strength=Math.max(0,smokeGrid[i]-.006);
-  pixels[i*4]=faceLight[0];pixels[i*4+1]=faceLight[1];pixels[i*4+2]=faceLight[2];
-  pixels[i*4+3]=Math.min(112,strength*190);
+ for(let i=0;i<pixels.length;i+=4){
+  let density=0;
+  for(const flow of active)density+=flow.density[i/4];
+  pixels[i]=faceLight[0];pixels[i+1]=faceLight[1];pixels[i+2]=faceLight[2];
+  pixels[i+3]=Math.min(146,Math.max(0,density-.009)*178);
  }
  smokeContext.putImageData(smokeImage,0,0);
  ctx.globalAlpha=1;
@@ -322,7 +301,6 @@ function render(t){
   ctx.globalAlpha=.84;
   ctx.fillStyle=faceColor;ctx.fillRect(point.x-.55,point.y-.55,1.1,1.1);
  }
- drawDissolving(dt);
  drawSmoke(dt);
  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
  for(let i=0;i<handCloud.length;i++){
