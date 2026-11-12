@@ -136,7 +136,7 @@ let photoReady=false;
 sandPhoto.onload=()=>{photoReady=true;fillSand();};
 sandPhoto.onerror=()=>{photoReady=false;};
 sandPhoto.src='./white-beach-sand.jpg';
-let previous=null,grains=[],lastFrame=0,seed=12345;
+let previous=null,grains=[],strokeGrains=[],lastFrame=0,seed=12345;
 
 // Locally synthesized dry sand friction: filtered, softly modulated noise.
 let sandAudio=null,lastRubTime=0;
@@ -215,6 +215,7 @@ function resetMass(cols=Math.ceil(w/cell),rows=Math.ceil(h/cell)){
 }
 function transferSand(cx,cy,radius,transport){
  const changes=new Map();
+ let moved=0;
  function add(index,amount){changes.set(index,(changes.get(index)||0)+amount);}
  const reach=radius/cell;
  for(let y=Math.max(0,Math.ceil(cy-reach));y<=Math.min(massRows-1,Math.floor(cy+reach));y++){
@@ -226,6 +227,7 @@ function transferSand(cx,cy,radius,transport){
     const targetX=Math.max(0,Math.min(massCols-1,toX));
     const targetY=Math.max(0,Math.min(massRows-1,toY));
     const amount=mass[source]*fraction;
+    moved+=amount;
     const x0=Math.floor(targetX),y0=Math.floor(targetY);
     const fx=targetX-x0,fy=targetY-y0;
     add(source,-amount);
@@ -238,6 +240,7 @@ function transferSand(cx,cy,radius,transport){
  }
  for(const [index,amount] of changes)mass[index]+=amount;
  massDirty=true;
+ return moved;
 }
 function displaceStroke(from,to){
  const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
@@ -247,7 +250,7 @@ function displaceStroke(from,to){
  const strength=1-Math.exp(-distance/steps*.24);
  for(let step=1;step<=steps;step++){
   const cx=(from.x+dx*step/steps)/cell-.5,cy=(from.y+dy*step/steps)/cell-.5;
-  transferSand(cx,cy,8,(x,y,r,move)=>{
+  const moved=transferSand(cx,cy,8,(x,y,r,move)=>{
    const lateral=(x-cx)*nx+(y-cy)*ny;
    const right=Math.max(0,Math.min(1,.5+lateral));
    const centerX=x-lateral*nx,centerY=y-lateral*ny;
@@ -259,7 +262,33 @@ function displaceStroke(from,to){
     if(right<1)move(centerX-ox,centerY-oy,amount*(1-right)*weight);
    }
   });
+  emitStrokeGrains((cx+.5)*cell,(cy+.5)*cell,nx,ny,moved);
  }
+}
+function emitStrokeGrains(x,y,nx,ny,moved){
+ const count=Math.min(10,Math.round(moved*1.4));
+ for(let i=0;i<count;i++){
+  const side=i%2===0?-1:1;
+  const start=2+Math.random()*3,end=8.5+Math.random()*5.5;
+  const along=(Math.random()-.5)*9;
+  strokeGrains.push({x:x-ny*along+nx*side*start,y:y+nx*along+ny*side*start,
+   dx:nx*side*(end-start),dy:ny*side*(end-start),age:0,duration:.12+Math.random()*.13,
+   size:.45+Math.random()*.85,tone:Math.random()<.5?'#f6eedc':'#9b876c'});
+ }
+ if(strokeGrains.length>360)strokeGrains.splice(0,strokeGrains.length-360);
+}
+function drawStrokeGrains(dt){
+ strokeGrains=strokeGrains.filter(grain=>{
+  grain.age+=dt;
+  if(grain.age>=grain.duration)return false;
+  const progress=grain.age/grain.duration;
+  const travel=1-(1-progress)**2;
+  g.globalAlpha=.85*Math.min(1,(1-progress)*4);
+  g.fillStyle=grain.tone;
+  g.fillRect(grain.x+grain.dx*travel,grain.y+grain.dy*travel,grain.size,grain.size);
+  return true;
+ });
+ g.globalAlpha=1;
 }
 function sweepSand(from,to,gatherCenter){
  const dx=to.x-from.x,dy=to.y-from.y,distance=Math.hypot(dx,dy);
@@ -330,7 +359,7 @@ function size(){
    mass[y*massCols+x]=oldMass[oldY*oldCols+oldX];
   }
  }
- resetHand();grains=[];
+ resetHand();grains=[];strokeGrains=[];
 }
 new ResizeObserver(size).observe(c);size();
 function point(e){const r=c.getBoundingClientRect();return {x:Math.max(0,Math.min(w,e.clientX-r.left)),y:Math.max(0,Math.min(h,e.clientY-r.top))};}
@@ -351,7 +380,7 @@ c.addEventListener('pointermove',e=>{if(inputMode.value!=='mouse'||!drawing)retu
 function release(e){if(inputMode.value!=='mouse')return;endStroke();if(c.hasPointerCapture(e.pointerId))c.releasePointerCapture(e.pointerId);}
 c.addEventListener('pointerup',release);c.addEventListener('pointercancel',release);c.addEventListener('lostpointercapture',()=>{if(inputMode.value==='mouse')endStroke();});
 window.addEventListener('blur',()=>resetHand());
-document.getElementById('clearSand').onclick=()=>{resetHand();grains=[];fillSand();resetMass();status.textContent='모래를 평평하게 골랐어요. 새 그림을 그려보세요.';};
+document.getElementById('clearSand').onclick=()=>{resetHand();grains=[];strokeGrains=[];fillSand();resetMass();status.textContent='모래를 평평하게 골랐어요. 새 그림을 그려보세요.';};
 start.onclick=async()=>{start.disabled=true;try{if(!navigator.mediaDevices?.getUserMedia)throw new Error('localhost 또는 HTTPS 주소에서 열어주세요.');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:1280},height:{ideal:720}},audio:false});v.srcObject=stream;await v.play();lastVideoTime=-1;lastDetect=-Infinity;trackingFailed=false;stop.disabled=false;void prepareFaceDetector();if(inputMode.value==='hand')void prepareHandDetector();status.textContent='웹캠이 켜졌어요. 검지만 펴서 그리거나 손끝을 모아 모래를 쓸어보세요.';}catch(e){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;start.disabled=false;status.textContent='카메라를 켜지 못했어요. 브라우저 카메라 권한과 다른 앱의 사용 여부를 확인해주세요. '+e.message;}};
 function end(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;v.srcObject=null;resetHand();handStatus.textContent='손 인식 대기 중';hg.clearRect(0,0,320,180);faceBox=null;lastFaceSeen=-Infinity;pg.clearRect(0,0,preview.width,preview.height);tracking.textContent='웹캠을 켜면 얼굴을 자동으로 찾아 확대합니다.';start.disabled=false;stop.disabled=true;status.textContent='웹캠을 껐어요. 마우스 테스트로 모래를 그릴 수 있어요.';}stop.onclick=end;window.addEventListener('pagehide',end);
 
@@ -359,6 +388,7 @@ function frame(t){
  updateFace(t);updateHand(t);renderHandPreview();const dt=Math.min((t-lastFrame)/1000||0,.05);lastFrame=t;
  g.drawImage(photoBase,0,0,w,h);
  drawRelief();
+ drawStrokeGrains(dt);
  for(const grain of grains){grain.life+=dt;grain.x+=grain.vx*dt;grain.y+=grain.vy*dt;grain.vy+=45*dt;g.globalAlpha=Math.max(0,1-grain.life/grain.ttl);g.fillStyle='#eee4d0';g.fillRect(grain.x,grain.y,1.5,1.5);}g.globalAlpha=1;grains=grains.filter(p=>p.life<p.ttl);
  const shade=g.createRadialGradient(w*.45,h*.4,Math.min(w,h)*.2,w*.5,h*.5,Math.max(w,h)*.65);shade.addColorStop(0,'rgba(44,27,8,0)');shade.addColorStop(1,'rgba(50,44,36,.13)');g.fillStyle=shade;g.fillRect(0,0,w,h);
  drawHandCursor();requestAnimationFrame(frame);
