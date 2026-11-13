@@ -317,7 +317,7 @@ function updateFinale(dt,t=performance.now()){
  }
  if(finale.phase==='portrait'){
   if(capturePortrait())finale.points=face.map(({x,y})=>({x,y}));
-  if(finale.age<1.65)return;
+  if(finale.age<3.3)return;
   finale.phase='burst';finale.age=0;
   finale.grid=portraitGrid(finale.points);
   finale.tiles=splitPortrait(finale.grid.bounds);
@@ -377,12 +377,23 @@ function portraitGrid(points){
  const cx=(x0+x1)*.5/scaleX,cy=(y0+y1)*.5/scaleY;
  const sourceWidth=Math.max(1,(x1-x0)/scaleX),sourceHeight=Math.max(1,(y1-y0)/scaleY);
  const top=Math.min(76,frameHeight*.14);
- const cellWidth=frameWidth/5,cellHeight=(frameHeight-top)/5;
- const scale=Math.min(cellWidth*.92/sourceWidth,cellHeight*.92/sourceHeight);
- const instances=Array.from({length:25},(_,i)=>({
-  x:(i%5+.5)*cellWidth,y:top+(Math.floor(i/5)+.5)*cellHeight,
-  scale,delay:((i*13)%11)*.011,side:i%2===0?1:-1
- }));
+ const centerX=frameWidth/2,centerY=(frameHeight+top)/2;
+ const radiusX=frameWidth*.42,radiusY=(frameHeight-top)*.415;
+ const spacing=Math.min(radiusX,radiusY);
+ const diagonal=Math.hypot(sourceWidth,sourceHeight);
+ const instances=[{x:centerX,y:centerY,scale:spacing*.37/diagonal,angle:0,mirror:1,delay:0,side:1}];
+ for(const [count,radius,phase,size] of [[4,.28,0,.21],[8,.60,Math.PI/8,.24],[12,1,Math.PI/12,.26]]){
+  for(let i=0;i<count;i++){
+   const angle=phase+i*Math.PI*2/count;
+   const side=i%2===0?1:-1;
+   instances.push({
+    x:centerX+Math.sin(angle)*radiusX*radius,
+    y:centerY-Math.cos(angle)*radiusY*radius,
+    scale:spacing*size/diagonal,angle,mirror:side,
+    delay:radius*.09+i*.004,side
+   });
+  }
+ }
  return {bounds,cx,cy,sourceWidth,sourceHeight,instances};
 }
 function splitPortrait({x0,y0,x1,y1}){
@@ -451,7 +462,8 @@ function drawPortrait(){
  for(const instance of grid.instances){
   ctx.save();
   ctx.translate(instance.x,instance.y);
-  ctx.scale(instance.scale,instance.scale);
+  ctx.rotate(instance.angle);
+  ctx.scale(instance.scale*instance.mirror,instance.scale);
   if(finale.phase==='portrait'){
    ctx.globalAlpha=.5*Math.min(1,finale.age/.28);
    ctx.drawImage(portrait,x0,y0,x1-x0,y1-y0,-grid.sourceWidth/2,-grid.sourceHeight/2,grid.sourceWidth,grid.sourceHeight);
