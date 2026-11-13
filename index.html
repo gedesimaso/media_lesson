@@ -20,11 +20,14 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
 .verse{text-align:center;display:grid;gap:.15em;font:normal clamp(2.8rem,9vw,7.8rem)/1.2 "Ma Shan Zheng","LXGW WenKai TC","Gungsuh","궁서",serif;color:#b5d6ee;letter-spacing:.08em}
 .verse[hidden]{display:none}
 .verse-row{display:flex;justify-content:center}
+.verse-reading{margin:.4em 0 .9em;color:#c8d9e7;letter-spacing:.12em;font:normal clamp(.95rem,3.2vw,1.45rem)/1.5 "궁서",Gungsuh,"LXGW WenKai KR",serif;opacity:0}
+#reflection p{margin:0}
+#reflection p+p{margin-top:1em}
+@media(max-height:500px){#closing{padding:12px 24px} #reflection{font-size:1rem;line-height:1.55}}
 .verse span{display:inline-block;opacity:0;text-shadow:0 0 .18em #7ca6ce7a}
 .verse span:nth-child(2){font-family:"LXGW WenKai TC","Gungsuh","궁서",serif}
 #reflection{width:min(100%,39rem);margin:0;line-height:1.95;color:#e8e7e4;font-family:"궁서",Gungsuh,"GungSeo","궁서체",GungsuhChe,"LXGW WenKai KR",serif;font-size:clamp(1.12rem,3.4vw,1.72rem);text-align:left;word-break:keep-all;opacity:0;transition:opacity 1.45s ease}
 #reflection.visible{opacity:1}
-#reflection.visitor-left{transition-duration:.32s;}
 @media (prefers-reduced-motion:reduce){#reflection{transition:none}}
 #intro{position:fixed;z-index:1;inset:auto 16px max(13vh,64px);margin:0 auto;width:max-content;max-width:calc(100% - 32px);text-align:center;color:#e5eff8;font-size:clamp(1rem,3.8vw,1.38rem);line-height:1.55;word-break:keep-all;text-shadow:0 2px 16px #000;pointer-events:none;opacity:0;transition:opacity .65s ease}
 #intro.visible{opacity:1}
@@ -42,9 +45,11 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
 <div id="closing" hidden>
  <div id="verse" class="verse" lang="zh-Hant" aria-label="色卽是空, 空卽是色">
   <div class="verse-row"><span>色</span><span>卽</span><span>是</span><span>空</span></div>
+  <p class="verse-reading" lang="ko">색즉시공</p>
   <div class="verse-row"><span>空</span><span>卽</span><span>是</span><span>色</span></div>
+  <p class="verse-reading" lang="ko">공즉시색</p>
  </div>
- <p id="reflection" aria-live="polite" hidden>눈앞에 드러난 모습은 그 자체로 고정된 것이 아니며, 비어 있음은 아무것도 없다는 뜻이 아니다. 수많은 조건이 만나 잠시 모습을 이루고, 그 모습은 다시 조건에 따라 변한다. 그러니 있는 그대로 보되, 그것을 영원한 실체라고 붙들지는 말라.</p>
+ <div id="reflection" aria-live="polite" hidden><p>눈앞에 드러난 모습은 그 자체로 고정된 것이 아니며, 비어 있음은 아무것도 없다는 뜻이 아니다.</p><p>수많은 조건이 만나 잠시 모습을 이루고, 그 모습은 다시 조건에 따라 변한다.</p><p>그러니 있는 그대로 보되, 그것을 영원한 실체라고 붙들지는 말라.</p></div>
 </div>
 <p id="intro" role="status" hidden>손을 올려 화면의 빛점들을 잡아보세요.</p>
 <canvas id="scene" aria-label="손으로 스치면 향 연기처럼 피어오르는 얼굴 점과 손의 관절 점"></canvas>
@@ -56,12 +61,13 @@ const start=document.getElementById('start'),stop=document.getElementById('stop'
 const visionUrl='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18';
 const modelUrl='https://storage.googleapis.com/mediapipe-models';
 let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastInference=0,lastVideoTime=-1;
-let face=[],handCloud=[],mouseDown=false,smoke=[],nextHit=0;
+let face=[],handGroups=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
 const closing=document.getElementById('closing'),verse=document.getElementById('verse');
 const reflection=document.getElementById('reflection'),intro=document.getElementById('intro');
 let introShown=false,introAt=null,faceMissingSince=null;
 const glyphs=[...verse.querySelectorAll('span')];
+const readings=[...verse.querySelectorAll('.verse-reading')];
 const reducedMotion=matchMedia('(prefers-reduced-motion: reduce)').matches;
 const clamp01=value=>Math.max(0,Math.min(1,value));
 const readingTime=14,reflectionFade=1.45,betweenVisitors=1.1;
@@ -72,8 +78,9 @@ function updateIntro(t){
  else if(t-introAt>=3500)intro.classList.remove('visible');
 }
 function hideClosing(){
+ for(const reading of readings)reading.style.opacity='0';
  closing.hidden=true;verse.hidden=false;reflection.hidden=true;
- reflection.classList.remove('visible','visitor-left');
+ reflection.classList.remove('visible');
  for(const glyph of glyphs){glyph.style.opacity='0';glyph.style.clipPath='';glyph.style.filter='';glyph.style.transform='';}
 }
 const faceOval=[10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109];
@@ -105,7 +112,7 @@ function resize(){
  ctx.setTransform(scale,0,0,scale,0,0);
  // Old screen coordinates are invalid after orientation or viewport changes.
  if(finale){finale=null;erased.clear();hideClosing();introShown=false;hideIntro();}
- face=[];handCloud=[];cameraTransform=null;sizeSmoke();
+ face=[];handGroups=[];cameraTransform=null;sizeSmoke();
 }
 new ResizeObserver(resize).observe(canvas);resize();
 
@@ -121,7 +128,7 @@ async function loadModels(){
   try{
    const handModel=await HandLandmarker.createFromOptions(files,{
     baseOptions:{modelAssetPath:modelUrl+'/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'},
-    runningMode:'VIDEO',numHands:1
+    runningMode:'VIDEO',numHands:4
    });
    return models={face:faceModel,hand:handModel};
   }catch(error){faceModel.close();throw error;}
@@ -152,14 +159,14 @@ function endCamera(){
  session++;
  stream?.getTracks().forEach(track=>track.stop());
  stream=null;video.srcObject=null;
- face=[];handCloud=[];mouseDown=false;cameraTransform=null;finale=null;introShown=false;faceMissingSince=null;hideIntro();hideClosing();clearSmoke();nextHit=0;erased.clear();
+ face=[];handGroups=[];mouseDown=false;cameraTransform=null;finale=null;introShown=false;faceMissingSince=null;hideIntro();hideClosing();clearSmoke();nextHit=0;erased.clear();
  start.disabled=false;stop.disabled=true;
 }
 stop.onclick=()=>{endCamera();status.textContent='웹캠을 켜고 손으로 얼굴의 빛 점을 스쳐보세요.';};
 window.addEventListener('pagehide',endCamera);
 function restartExperience(t){
  finale=null;introShown=false;hideIntro();hideClosing();
- erased.clear();clearSmoke();face=[];handCloud=[];mouseDown=false;
+ erased.clear();clearSmoke();face=[];handGroups=[];mouseDown=false;
  nextHit=t+280;
  status.textContent='다음 체험을 시작할 수 있어요. 카메라를 바라봐 주세요.';
 }
@@ -182,7 +189,14 @@ function track(t){
  try{
   const landmarks=models.face.detectForVideo(video,t).faceLandmarks[0];
   faceMissingSince=landmarks?null:(faceMissingSince??t);
-  const hand=models.hand.detectForVideo(video,t).landmarks[0];
+  if(!landmarks){
+   handGroups=[];
+   if(t-faceMissingSince>=250&&(introShown||finale||erased.size)){
+    restartExperience(t);
+   }
+   if(!finale)status.textContent='카메라 가운데에 얼굴을 보여주세요.';
+   return;
+  }
   face=landmarks?landmarks.map((point,id)=>{
    const projected=project(point,transform),old=face[id];
    return {x:old?old.x+(projected.x-old.x)*.55:projected.x,
@@ -194,14 +208,28 @@ function track(t){
    introShown=true;introAt=t;intro.hidden=false;
    requestAnimationFrame(()=>{if(introAt===t)intro.classList.add('visible');});
   }
-  const previousHand=handCloud;
-  handCloud=hand?hand.map(point=>project(point,transform)):[];
-  status.textContent=!landmarks?'카메라 가운데에 얼굴을 보여주세요.':handCloud.length?'손 인식 중 · 얼굴 점 위로 손을 움직여 보세요.':'손 인식 대기 · 손 전체를 카메라에 보여주세요.';
-  if(!mouseDown&&handCloud.length&&previousHand.length)brushHand(handCloud,previousHand,t);
+  const previousHands=handGroups;
+  handGroups=models.hand.detectForVideo(video,t).landmarks.map(hand=>hand.map(point=>project(point,transform)));
+  status.textContent=handGroups.length?'손 인식 중 · 얼굴 점 위로 손을 움직여 보세요.':'손 인식 대기 · 손 전체를 카메라에 보여주세요.';
+  if(!mouseDown)brushHands(handGroups,previousHands,t);
  }catch(error){
   endCamera();
   status.textContent='추적이 멈췄어요. 웹캠을 다시 켜주세요.';
   console.error(error);
+ }
+}
+function brushHands(current,previous,t){
+ const matches=[];
+ for(const [i,hand] of current.entries())for(const [j,prior] of previous.entries()){
+  const distance=Math.hypot(hand[0].x-prior[0].x,hand[0].y-prior[0].y);
+  if(distance<130)matches.push({i,j,distance});
+ }
+ matches.sort((a,b)=>a.distance-b.distance);
+ const usedCurrent=new Set(),usedPrevious=new Set();
+ for(const {i,j} of matches){
+  if(usedCurrent.has(i)||usedPrevious.has(j))continue;
+  usedCurrent.add(i);usedPrevious.add(j);
+  brushHand(current[i],previous[j],t);
  }
 }
 function brushHand(points,previous,t){
@@ -332,19 +360,9 @@ function updateFinale(dt,t=performance.now()){
   reflection.hidden=false;
   requestAnimationFrame(()=>{if(finale?.phase==='reflection')reflection.classList.add('visible');});
  }
- const visitorLeft=faceMissingSince!==null&&t-faceMissingSince>=550;
- if(finale.phase==='reflection'&&(finale.age>=readingTime||visitorLeft)){
-  reflection.classList.toggle('visitor-left',visitorLeft);
-  reflection.classList.remove('visible');
-  finale.phase='reflectionFade';finale.age=0;
-  finale.quickRestart=visitorLeft;
- }else if(finale.phase==='reflectionFade'){
-  if(visitorLeft&&!finale.quickRestart){
-   finale.quickRestart=true;
-   reflection.classList.add('visitor-left');
-  }
-  if(finale.age<(finale.quickRestart ? .34 : reflectionFade))return;
-  if(finale.quickRestart){restartExperience(t);return;}
+ if(finale.phase==='reflection'&&finale.age>=readingTime){
+  reflection.classList.remove('visible');finale.phase='reflectionFade';finale.age=0;
+ }else if(finale.phase==='reflectionFade'&&finale.age>=reflectionFade){
   hideClosing();finale.phase='betweenVisitors';finale.age=0;
  }else if(finale.phase==='betweenVisitors'&&finale.age>=betweenVisitors){
   restartExperience(t);
@@ -363,6 +381,11 @@ function updateVerse(){
   glyph.style.filter='blur('+((1-written)*3+fading*8)+'px)';
   glyph.style.transform='translateY('+(-fading*16)+'px)';
  }
+ for(let row=0;row<readings.length;row++){
+  const last=row*4+3;
+  const appear=reducedMotion?1:clamp01((age-last*.36)/.58);
+  readings[row].style.opacity=String(appear*(1-clamp01((age-releaseAt-row*.44)/.78)));
+ }
  if(age>=releaseAt+(glyphs.length-1)*.11+.8){
   verse.hidden=true;finale.phase='reflectionPending';finale.age=0;
  }
@@ -378,11 +401,11 @@ function portraitGrid(points){
  const sourceWidth=Math.max(1,(x1-x0)/scaleX),sourceHeight=Math.max(1,(y1-y0)/scaleY);
  const top=Math.min(76,frameHeight*.14);
  const centerX=frameWidth/2,centerY=(frameHeight+top)/2;
- const radiusX=frameWidth*.42,radiusY=(frameHeight-top)*.415;
+ const radiusX=frameWidth*.405,radiusY=(frameHeight-top)*.40;
  const spacing=Math.min(radiusX,radiusY);
  const diagonal=Math.hypot(sourceWidth,sourceHeight);
- const instances=[{x:centerX,y:centerY,scale:spacing*.37/diagonal,angle:0,mirror:1,delay:0,side:1}];
- for(const [count,radius,phase,size] of [[4,.28,0,.21],[8,.60,Math.PI/8,.24],[12,1,Math.PI/12,.26]]){
+ const instances=[{x:centerX,y:centerY,scale:spacing*.48/diagonal,angle:0,mirror:1,delay:0,side:1}];
+ for(const [count,radius,phase,size] of [[4,.31,0,.31],[8,.63,Math.PI/8,.36],[12,1,Math.PI/12,.41]]){
   for(let i=0;i<count;i++){
    const angle=phase+i*Math.PI*2/count;
    const side=i%2===0?1:-1;
@@ -636,7 +659,7 @@ function drawHandSplat(x,y,rx,ry,angle,opacity){
  ctx.drawImage(sprites[2],-rx,-ry,rx*2,ry*2);
  ctx.restore();
 }
-function drawHand(){
+function drawHand(handCloud){
  if(handCloud.length<21)return;
  const wrist=handCloud[0],index=handCloud[5],little=handCloud[17],middle=handCloud[9];
  const palmWidth=Math.max(12,Math.hypot(index.x-little.x,index.y-little.y));
@@ -680,7 +703,7 @@ function render(t){
  drawSmoke(dt);
  drawFootage(dt);
  ctx.globalAlpha=1;ctx.globalCompositeOperation='source-over';
- if(!finale)drawHand();
+ if(!finale)for(const hand of handGroups)drawHand(hand);
  requestAnimationFrame(render);
 }
 requestAnimationFrame(render);
