@@ -32,6 +32,7 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
 #intro{position:fixed;z-index:1;inset:auto 16px max(13vh,64px);margin:0 auto;width:max-content;max-width:calc(100% - 32px);text-align:center;color:#e5eff8;font-size:clamp(1rem,3.8vw,1.38rem);line-height:1.55;word-break:keep-all;text-shadow:0 2px 16px #000;pointer-events:none;opacity:0;transition:opacity .65s ease}
 #intro.visible{opacity:1}
 @media (prefers-reduced-motion:reduce){#intro{transition:none}}
+#clear-caption{position:fixed;z-index:1;inset:auto 16px max(24px,env(safe-area-inset-bottom));width:fit-content;max-width:calc(100% - 32px);margin:0 auto;padding:.35em .75em;border-radius:.25em;background:#000b;color:#fff;font-size:clamp(1.15rem,4vw,1.65rem);line-height:1.45;text-align:center;word-break:keep-all;pointer-events:none}
 </style>
 </head>
 <body>
@@ -52,6 +53,7 @@ canvas{display:block;width:100%;height:100vh;height:100dvh;touch-action:none}
  <div id="reflection" aria-live="polite" hidden><p>눈앞에 드러난 모습은 그 자체로 고정된 것이 아니며, 비어 있음은 아무것도 없다는 뜻이 아니다.</p><p>수많은 조건이 만나 잠시 모습을 이루고, 그 모습은 다시 조건에 따라 변한다.</p><p>그러니 있는 그대로 보되, 그것을 영원한 실체라고 붙들지는 말라.</p></div>
 </div>
 <p id="intro" role="status" hidden>손을 올려 화면의 빛점들을 잡아보세요.</p>
+<p id="clear-caption" hidden>빛점을 모두 없애세요.</p>
 <canvas id="scene" aria-label="손으로 스치면 향 연기처럼 피어오르는 얼굴 점과 손의 관절 점"></canvas>
 <video id="camera" autoplay muted playsinline hidden></video>
 <script type="module">
@@ -64,6 +66,7 @@ let models,loading,stream,session=0,frameWidth=1,frameHeight=1,lastFrame=0,lastI
 let face=[],handGroups=[],mouseDown=false,smoke=[],nextHit=0;
 const erased=new Set();
 const closing=document.getElementById('closing'),verse=document.getElementById('verse');
+const clearCaption=document.getElementById('clear-caption');
 const reflection=document.getElementById('reflection'),intro=document.getElementById('intro');
 let introShown=false,introAt=null,faceMissingSince=null;
 const glyphs=[...verse.querySelectorAll('span')];
@@ -214,7 +217,6 @@ function track(t){
   const previousHands=handGroups;
   handGroups=models.hand.detectForVideo(video,t).landmarks.map(hand=>hand.map(point=>project(point,transform)));
   status.textContent=handGroups.length?'손 인식 중 · 얼굴 점 위로 손을 움직여 보세요.':'손 인식 대기 · 손 전체를 카메라에 보여주세요.';
-  status.textContent+=' 빛점을 모두 지우면 다음 영상으로 넘어갑니다.';
   if(!mouseDown)brushHands(handGroups,previousHands,t);
  }catch(error){
   endCamera();
@@ -690,6 +692,7 @@ function render(t){
  track(t);
  updateIntro(t);
  updateFinale(dt,t);
+ clearCaption.hidden=Boolean(finale)||!face.length;
  ctx.globalAlpha=1;
  ctx.globalCompositeOperation='source-over';
  ctx.fillStyle='#000';ctx.fillRect(0,0,frameWidth,frameHeight);
