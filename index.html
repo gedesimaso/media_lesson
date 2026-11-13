@@ -211,6 +211,7 @@ function track(t){
   const previousHands=handGroups;
   handGroups=models.hand.detectForVideo(video,t).landmarks.map(hand=>hand.map(point=>project(point,transform)));
   status.textContent=handGroups.length?'손 인식 중 · 얼굴 점 위로 손을 움직여 보세요.':'손 인식 대기 · 손 전체를 카메라에 보여주세요.';
+  status.textContent+=' 빛점을 모두 지우면 다음 영상으로 넘어갑니다.';
   if(!mouseDown)brushHands(handGroups,previousHands,t);
  }catch(error){
   endCamera();
