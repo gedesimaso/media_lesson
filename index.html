@@ -190,11 +190,14 @@ function track(t){
   const landmarks=models.face.detectForVideo(video,t).faceLandmarks[0];
   faceMissingSince=landmarks?null:(faceMissingSince??t);
   if(!landmarks){
-   handGroups=[];
-   if(t-faceMissingSince>=250&&(introShown||finale||erased.size)){
-    restartExperience(t);
-   }
-   if(!finale)status.textContent='카메라 가운데에 얼굴을 보여주세요.';
+   const active=Boolean(introShown||finale||erased.size);
+   // Hands may cover the face while the visitor is clearing points.
+   handGroups=active&&!finale
+    ? models.hand.detectForVideo(video,t).landmarks.map(hand=>hand.map(point=>project(point,transform)))
+    : [];
+   const grace=handGroups.length?2500:850;
+   if(active&&t-faceMissingSince>=grace)restartExperience(t);
+   if(!finale)status.textContent=face.length?'얼굴을 다시 찾는 중이에요.':'카메라 가운데에 얼굴을 보여주세요.';
    return;
   }
   face=landmarks?landmarks.map((point,id)=>{
