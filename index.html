@@ -408,10 +408,10 @@ function portraitGrid(points){
  const top=Math.min(76,frameHeight*.14);
  const centerX=frameWidth/2,centerY=(frameHeight+top)/2;
  const radiusX=frameWidth*.405,radiusY=(frameHeight-top)*.40;
- const spacing=Math.min(radiusX,radiusY);
+ const spacing=Math.min(Math.sqrt(radiusX*radiusY),Math.min(radiusX,radiusY)*1.28);
  const diagonal=Math.hypot(sourceWidth,sourceHeight);
- const instances=[{x:centerX,y:centerY,scale:spacing*.48/diagonal,angle:0,mirror:1,delay:0,side:1}];
- for(const [count,radius,phase,size] of [[4,.31,0,.31],[8,.63,Math.PI/8,.36],[12,1,Math.PI/12,.41]]){
+ const instances=[{x:centerX,y:centerY,scale:spacing*.68/diagonal,angle:0,mirror:1,delay:0,side:1}];
+ for(const [count,radius,phase,size] of [[8,.26,0,.42],[16,.56,Math.PI/16,.46],[24,.88,0,.48]]){
   for(let i=0;i<count;i++){
    const angle=phase+i*Math.PI*2/count;
    const side=i%2===0?1:-1;
@@ -430,7 +430,7 @@ function splitPortrait({x0,y0,x1,y1}){
  const width=x1-x0,height=y1-y0;
  if(width<=0||height<=0)return [];
  const pixels=portraitPaint.getImageData(x0,y0,width,height).data;
- const stride=Math.max(4,Math.ceil(Math.sqrt(width*height/92)));
+ const stride=Math.max(4,Math.ceil(Math.sqrt(width*height/62)));
  const tiles=[];
  for(let y=0;y<height;y+=stride)for(let x=0;x<width;x+=stride){
   const w=Math.min(stride,width-x),h=Math.min(stride,height-y);
